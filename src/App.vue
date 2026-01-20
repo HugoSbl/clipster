@@ -1,131 +1,160 @@
-<script setup lang="js">
-import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+<script setup lang="ts">
+import { onMounted, onUnmounted, ref, watch } from 'vue';
+import { listen } from '@tauri-apps/api/event';
+import { useClipboardStore } from '@/stores/clipboard';
+import { usePinboardStore } from '@/stores/pinboards';
+import { useSettingsStore } from '@/stores/settings';
+import { useKeyboard } from '@/composables/useKeyboard';
+import PinboardTabs from './components/PinboardTabs.vue';
+import SearchBar from './components/SearchBar.vue';
+import Timeline from './components/Timeline.vue';
+import Settings from './components/Settings.vue';
+import type { UnlistenFn } from '@tauri-apps/api/event';
 
-import List from './components/display-paste/List.vue'
+const clipboardStore = useClipboardStore();
+const pinboardStore = usePinboardStore();
+const settingsStore = useSettingsStore();
 
+// Component refs
+const searchBarRef = ref<InstanceType<typeof SearchBar> | null>(null);
+const timelineRef = ref<InstanceType<typeof Timeline> | null>(null);
+
+let unlistenFn: UnlistenFn | null = null;
+let unlistenSettings: UnlistenFn | null = null;
+
+onMounted(async () => {
+  // Fetch pinboards, settings, and initial history
+  await Promise.all([
+    pinboardStore.fetchPinboards(),
+    settingsStore.fetchSettings(),
+    clipboardStore.fetchHistory(),
+  ]);
+
+  // Set up real-time event listener
+  unlistenFn = await clipboardStore.setupEventListener();
+
+  // Listen for tray settings event
+  unlistenSettings = await listen('open-settings', () => {
+    settingsStore.openSettings();
+  });
+});
+
+// Watch for pinboard changes and refresh items
+watch(
+  () => pinboardStore.activePinboardId,
+  async (pinboardId) => {
+    clipboardStore.setActivePinboard(pinboardId);
+    if (pinboardId) {
+      await clipboardStore.fetchPinboardItems(pinboardId);
+    } else {
+      await clipboardStore.fetchHistory();
+    }
+  }
+);
+
+onUnmounted(() => {
+  // Clean up event listeners
+  if (unlistenFn) {
+    unlistenFn();
+  }
+  if (unlistenSettings) {
+    unlistenSettings();
+  }
+});
+
+// Handle search
+const handleSearch = async (query: string) => {
+  await clipboardStore.search(query);
+};
+
+// Set up global keyboard handling
+useKeyboard({
+  onNavigateLeft: () => {
+    timelineRef.value?.navigateLeft();
+  },
+  onNavigateRight: () => {
+    timelineRef.value?.navigateRight();
+  },
+  onSelect: () => {
+    timelineRef.value?.selectCurrent();
+  },
+  onDelete: () => {
+    timelineRef.value?.deleteCurrent();
+  },
+  onFocusSearch: () => {
+    searchBarRef.value?.focus();
+  },
+  onEscape: () => {
+    timelineRef.value?.clearSelection();
+  },
+  onToggleFavorite: () => {
+    timelineRef.value?.toggleFavoriteCurrent();
+  },
+});
 </script>
 
 <template>
-  <main class="container">
-    
-    <List />
+  <main class="app-container">
+    <PinboardTabs />
+    <SearchBar
+      ref="searchBarRef"
+      :model-value="clipboardStore.searchQuery"
+      @search="handleSearch"
+    />
+    <Timeline ref="timelineRef" />
+    <Settings />
   </main>
 </template>
 
-<style scoped>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.vue:hover {
-  filter: drop-shadow(0 0 2em #249b73);
-}
-
-</style>
 <style>
 :root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
   font-weight: 400;
 
-  color: #0f0f0f;
-  background-color: #f6f6f6;
+  color: #1f2937;
+  background-color: #f9fafb;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
 }
 
-.container {
+* {
+  box-sizing: border-box;
   margin: 0;
-  padding-top:1em;
+  padding: 0;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+.app-container {
+  height: 100%;
+  width: 100%;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  text-align: center;
 }
 
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
+/* Global button reset */
 button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
   font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
   cursor: pointer;
 }
 
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
+/* Dark mode */
 @media (prefers-color-scheme: dark) {
   :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
-
-  a:hover {
-    color: #24c8db;
-  }
-
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
+    color: #f3f4f6;
+    background-color: #111827;
   }
 }
-
 </style>
