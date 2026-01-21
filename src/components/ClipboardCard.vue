@@ -16,6 +16,9 @@ const emit = defineEmits<{
 
 const pinboardStore = usePinboardStore();
 
+// Refs
+const cardRef = ref<HTMLElement | null>(null);
+
 // Drag state
 const isDragging = ref(false);
 
@@ -140,10 +143,6 @@ const hasVisualPreview = computed(() => {
 });
 
 // Handle card click
-const handleClick = () => {
-  emit('select', props.item);
-};
-
 // Handle double click to copy
 const handleDoubleClick = () => {
   emit('copy', props.item);
@@ -155,21 +154,99 @@ const handleDelete = (e: Event) => {
   emit('delete', props.item.id);
 };
 
-// Drag handlers
-const handleDragStart = (e: DragEvent) => {
-  isDragging.value = true;
-  pinboardStore.setDragging(true);
+// Handle card click
+const handleClick = () => {
+  emit('select', props.item);
+};
 
-  if (e.dataTransfer) {
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('application/x-clipboard-item', props.item.id);
-    e.dataTransfer.setData('text/plain', props.item.id);
+// Store for cleanup
+let dragClone: HTMLElement | null = null;
+
+// Copy computed styles from source to target element (inline)
+const copyStyles = (source: Element, target: HTMLElement) => {
+  const computed = window.getComputedStyle(source);
+  for (const prop of computed) {
+    try {
+      target.style.setProperty(prop, computed.getPropertyValue(prop));
+    } catch {
+      // Some properties can't be set
+    }
+  }
+};
+
+// Recursively copy styles to all descendants
+const deepCopyStyles = (source: Element, target: Element) => {
+  copyStyles(source, target as HTMLElement);
+  const sourceChildren = source.children;
+  const targetChildren = target.children;
+  for (let i = 0; i < sourceChildren.length && i < targetChildren.length; i++) {
+    deepCopyStyles(sourceChildren[i], targetChildren[i]);
+  }
+};
+
+// Create an exact clone of the card with inline styles
+const createExactClone = (): HTMLElement | null => {
+  if (!cardRef.value) return null;
+
+  const rect = cardRef.value.getBoundingClientRect();
+
+  // Clone the entire card
+  const clone = cardRef.value.cloneNode(true) as HTMLElement;
+
+  // Copy all computed styles inline (this isolates the clone from CSS)
+  deepCopyStyles(cardRef.value, clone);
+
+  // Set fixed dimensions and position
+  clone.style.position = 'fixed';
+  clone.style.left = '-9999px';
+  clone.style.top = '-9999px';
+  clone.style.width = `${rect.width}px`;
+  clone.style.height = `${rect.height}px`;
+  clone.style.margin = '0';
+  clone.style.transform = 'none';
+  clone.style.pointerEvents = 'none';
+  clone.style.zIndex = '99999';
+  clone.style.opacity = '1';
+  clone.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.2)';
+
+  return clone;
+};
+
+// Native HTML5 drag handlers
+const handleDragStart = (e: DragEvent) => {
+  if (!e.dataTransfer || !cardRef.value) return;
+
+  isDragging.value = true;
+  pinboardStore.setDragging(true, props.item.id);
+
+  // Set drag data with multiple formats for compatibility
+  e.dataTransfer.setData('text/plain', props.item.id);
+  e.dataTransfer.setData('application/x-clipboard-item', props.item.id);
+  e.dataTransfer.effectAllowed = 'move';
+
+  // Create exact clone with inline styles to avoid WebView ghost bugs
+  dragClone = createExactClone();
+  if (dragClone) {
+    document.body.appendChild(dragClone);
+
+    const rect = cardRef.value.getBoundingClientRect();
+    const offsetX = e.clientX - rect.left;
+    const offsetY = e.clientY - rect.top;
+    e.dataTransfer.setDragImage(dragClone, offsetX, offsetY);
+
+    // Clean up clone after a short delay (drag image is captured synchronously)
+    setTimeout(() => {
+      if (dragClone) {
+        dragClone.remove();
+        dragClone = null;
+      }
+    }, 100);
   }
 };
 
 const handleDragEnd = () => {
   isDragging.value = false;
-  pinboardStore.setDragging(false);
+  pinboardStore.setDragging(false, null);
 };
 </script>
 
@@ -177,6 +254,7 @@ const handleDragEnd = () => {
   <!-- Visual Preview Card (Image/File with thumbnail) -->
   <div
     v-if="hasVisualPreview"
+    ref="cardRef"
     class="clipboard-card visual-card"
     :class="{
       selected: selected,
@@ -211,6 +289,7 @@ const handleDragEnd = () => {
           :alt="item.source_app || 'Source'"
           :title="item.source_app || 'Source app'"
           class="source-icon"
+          draggable="false"
         />
         <span v-else class="source-icon-placeholder" :title="item.source_app || 'Unknown'">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -229,6 +308,7 @@ const handleDragEnd = () => {
         :alt="item.content_type === 'image' ? 'Image' : 'File preview'"
         class="visual-preview"
         loading="lazy"
+        draggable="false"
       />
       <!-- File count badge (for multiple files) -->
       <div v-if="item.content_type === 'files' && fileInfo.count > 1" class="visual-badge">
@@ -242,6 +322,7 @@ const handleDragEnd = () => {
   <!-- Standard Card (Text, Link, Audio, Files without preview) -->
   <div
     v-else
+    ref="cardRef"
     class="clipboard-card"
     :class="{
       selected: selected,
@@ -296,6 +377,7 @@ const handleDragEnd = () => {
           :alt="item.source_app || 'Source'"
           :title="item.source_app || 'Source app'"
           class="source-icon"
+          draggable="false"
         />
         <span v-else class="source-icon-placeholder" :title="item.source_app || 'Unknown'">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -381,13 +463,17 @@ const handleDragEnd = () => {
   transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
   overflow: hidden;
   position: relative;
+  /* Prevent text selection */
   user-select: none;
-  -webkit-user-drag: element;
-  isolation: isolate; /* Isolate for proper drag ghost */
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .clipboard-card * {
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  /* Prevent children from being individually dragged */
   -webkit-user-drag: none;
 }
 
@@ -489,6 +575,8 @@ const handleDragEnd = () => {
   padding: 6px 10px;
   flex-shrink: 0;
   border-radius: 10px 10px 0 0;
+  overflow: hidden;
+  max-width: 100%;
 }
 
 /* Header color themes */
@@ -518,6 +606,7 @@ const handleDragEnd = () => {
   gap: 6px;
   min-width: 0;
   flex: 1;
+  overflow: hidden;
 }
 
 .type-badge {
@@ -575,6 +664,7 @@ const handleDragEnd = () => {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+  overflow: hidden;
 }
 
 .timestamp {

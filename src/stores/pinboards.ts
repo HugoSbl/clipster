@@ -3,12 +3,22 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Pinboard } from '@/types';
 import { useClipboardStore } from './clipboard';
 
+interface DropZone {
+  id: string;
+  element: HTMLElement;
+  type: 'pinboard' | 'history';
+}
+
 interface PinboardState {
   pinboards: Pinboard[];
   activePinboardId: string | null; // null = History view
   loading: boolean;
   error: string | null;
   isDraggingItem: boolean; // true when dragging a clipboard item
+  draggingItemId: string | null; // ID of the item being dragged
+  dragPosition: { x: number; y: number } | null;
+  dropZones: DropZone[];
+  hoveredDropZone: string | null; // ID of currently hovered drop zone
 }
 
 export const usePinboardStore = defineStore('pinboards', {
@@ -18,6 +28,10 @@ export const usePinboardStore = defineStore('pinboards', {
     loading: false,
     error: null,
     isDraggingItem: false,
+    draggingItemId: null,
+    dragPosition: null,
+    dropZones: [],
+    hoveredDropZone: null,
   }),
 
   getters: {
@@ -210,8 +224,67 @@ export const usePinboardStore = defineStore('pinboards', {
     /**
      * Set dragging state (for visual feedback on pinboard tabs)
      */
-    setDragging(isDragging: boolean): void {
+    setDragging(isDragging: boolean, itemId: string | null = null): void {
       this.isDraggingItem = isDragging;
+      this.draggingItemId = itemId;
+      if (!isDragging) {
+        this.dragPosition = null;
+        this.hoveredDropZone = null;
+      }
+    },
+
+    /**
+     * Register a drop zone element
+     */
+    registerDropZone(id: string, element: HTMLElement, type: 'pinboard' | 'history'): void {
+      // Remove existing with same ID first
+      this.dropZones = this.dropZones.filter((z) => z.id !== id);
+      this.dropZones.push({ id, element, type });
+    },
+
+    /**
+     * Unregister a drop zone
+     */
+    unregisterDropZone(id: string): void {
+      this.dropZones = this.dropZones.filter((z) => z.id !== id);
+    },
+
+    /**
+     * Update drag position and check for hovered drop zones
+     */
+    updateDragPosition(x: number, y: number): void {
+      this.dragPosition = { x, y };
+
+      // Find which drop zone is under the cursor
+      let found: string | null = null;
+      for (const zone of this.dropZones) {
+        const rect = zone.element.getBoundingClientRect();
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+          found = zone.id;
+          break;
+        }
+      }
+      this.hoveredDropZone = found;
+    },
+
+    /**
+     * Complete the drag operation - check drop zone and execute action
+     */
+    async completeDrag(x: number, y: number): Promise<void> {
+      if (!this.draggingItemId) return;
+
+      // Find drop zone at position
+      for (const zone of this.dropZones) {
+        const rect = zone.element.getBoundingClientRect();
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+          if (zone.type === 'history') {
+            await this.removeItemFromPinboard(this.draggingItemId);
+          } else {
+            await this.addItemToPinboard(this.draggingItemId, zone.id);
+          }
+          break;
+        }
+      }
     },
   },
 });

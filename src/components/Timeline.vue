@@ -223,6 +223,9 @@ const handleCardClick = (item: ClipboardItem) => {
   min-height: 0;
   outline: none;
   overflow: hidden;
+  /* Prevent text selection across cards */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* Header */
@@ -313,6 +316,9 @@ const handleCardClick = (item: ClipboardItem) => {
   scroll-behavior: smooth;
   scroll-snap-type: x mandatory;
   min-height: 0; /* Important for flex child */
+  /* Prevent text selection */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* Custom scrollbar */
@@ -347,8 +353,6 @@ const handleCardClick = (item: ClipboardItem) => {
 
 .timeline-track > * {
   scroll-snap-align: start;
-  /* Each card is isolated for drag operations */
-  contain: layout style;
 }
 
 /* Modal styles */

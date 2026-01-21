@@ -41,7 +41,7 @@ const editingIcon = ref('📌');
 const editInputRef = ref<HTMLInputElement | null>(null);
 const editPopoverPosition = ref({ x: 0, y: 0 });
 
-// Drop state
+// Drop target state for native drag
 const dropTargetId = ref<string | null>(null);
 
 // Computed
@@ -52,6 +52,55 @@ const isDraggingItem = computed(() => store.isDraggingItem);
 // Handle tab click
 const handleTabClick = (pinboardId: string | null) => {
   store.setActivePinboard(pinboardId);
+};
+
+// Native drag and drop handlers
+const isValidDragData = (e: DragEvent): boolean => {
+  if (!e.dataTransfer) return false;
+  return e.dataTransfer.types.includes('text/plain') ||
+    e.dataTransfer.types.includes('application/x-clipboard-item');
+};
+
+const getItemIdFromDrag = (e: DragEvent): string | null => {
+  if (!e.dataTransfer) return null;
+  const id = e.dataTransfer.getData('application/x-clipboard-item') ||
+    e.dataTransfer.getData('text/plain');
+  // Validate it looks like a UUID
+  if (id && /^[0-9a-f-]{36}$/i.test(id)) {
+    return id;
+  }
+  return null;
+};
+
+const handleDragOver = (e: DragEvent, targetId: string) => {
+  if (!isValidDragData(e)) return;
+  e.preventDefault();
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = 'move';
+  }
+  dropTargetId.value = targetId;
+};
+
+const handleDragLeave = (e: DragEvent) => {
+  // Only clear if leaving to outside
+  const relatedTarget = e.relatedTarget as HTMLElement;
+  if (!relatedTarget || !relatedTarget.closest('.tab-drop-zone, .history-tab')) {
+    dropTargetId.value = null;
+  }
+};
+
+const handleDrop = async (e: DragEvent, targetId: string, isHistory: boolean) => {
+  e.preventDefault();
+  dropTargetId.value = null;
+
+  const itemId = getItemIdFromDrag(e);
+  if (!itemId) return;
+
+  if (isHistory) {
+    await store.removeItemFromPinboard(itemId);
+  } else {
+    await store.addItemToPinboard(itemId, targetId);
+  }
 };
 
 // Show create popover
@@ -168,64 +217,6 @@ const handleClickOutside = () => {
   }
 };
 
-// Drop handlers
-const handleDragOver = (e: DragEvent, pinboardId: string) => {
-  e.preventDefault();
-  if (e.dataTransfer) {
-    e.dataTransfer.dropEffect = 'move';
-  }
-  dropTargetId.value = pinboardId;
-};
-
-const handleDragLeave = () => {
-  dropTargetId.value = null;
-};
-
-const handleDrop = async (e: DragEvent, pinboardId: string) => {
-  e.preventDefault();
-  dropTargetId.value = null;
-
-  // Try custom MIME type first, then fallback to text/plain which contains item ID
-  let itemId = e.dataTransfer?.getData('application/x-clipboard-item');
-  if (!itemId) {
-    // Fallback: check if text/plain contains a valid item ID (UUID format)
-    const textData = e.dataTransfer?.getData('text/plain');
-    if (textData && /^[0-9a-f-]{36}$/i.test(textData)) {
-      itemId = textData;
-    }
-  }
-
-  if (itemId && pinboardId) {
-    await store.addItemToPinboard(itemId, pinboardId);
-  }
-};
-
-// Handle drop on history tab (removes from pinboard)
-const handleDropOnHistory = async (e: DragEvent) => {
-  e.preventDefault();
-  dropTargetId.value = null;
-
-  // Try custom MIME type first, then fallback to text/plain which contains item ID
-  let itemId = e.dataTransfer?.getData('application/x-clipboard-item');
-  if (!itemId) {
-    const textData = e.dataTransfer?.getData('text/plain');
-    if (textData && /^[0-9a-f-]{36}$/i.test(textData)) {
-      itemId = textData;
-    }
-  }
-
-  if (itemId) {
-    await store.removeItemFromPinboard(itemId);
-  }
-};
-
-const handleDragOverHistory = (e: DragEvent) => {
-  e.preventDefault();
-  if (e.dataTransfer) {
-    e.dataTransfer.dropEffect = 'move';
-  }
-  dropTargetId.value = 'history';
-};
 </script>
 
 <template>
@@ -239,15 +230,15 @@ const handleDragOverHistory = (e: DragEvent) => {
         'drop-ready': isDraggingItem && dropTargetId !== 'history'
       }"
       @click="handleTabClick(null)"
-      @dragover="handleDragOverHistory"
+      @dragover="handleDragOver($event, 'history')"
       @dragleave="handleDragLeave"
-      @drop="handleDropOnHistory"
+      @drop="handleDrop($event, 'history', true)"
     >
       <span class="tab-icon">📋</span>
       <span class="tab-name">History</span>
     </button>
 
-    <!-- Pinboard Tabs (without vuedraggable to allow external drops) -->
+    <!-- Pinboard Tabs -->
     <div class="pinboard-tabs-list">
       <div
         v-for="pinboard in sortedPinboards"
@@ -259,7 +250,7 @@ const handleDragOverHistory = (e: DragEvent) => {
         }"
         @dragover="handleDragOver($event, pinboard.id)"
         @dragleave="handleDragLeave"
-        @drop="handleDrop($event, pinboard.id)"
+        @drop="handleDrop($event, pinboard.id, false)"
       >
         <button
           class="tab pinboard-tab"
