@@ -2,7 +2,7 @@
  * Content type for clipboard items
  * Matches Rust enum: crate::models::ContentType
  */
-export type ContentType = 'text' | 'image' | 'files';
+export type ContentType = 'text' | 'image' | 'files' | 'link' | 'audio';
 
 /**
  * Clipboard item structure
@@ -15,6 +15,7 @@ export interface ClipboardItem {
   thumbnail_base64: string | null;
   image_path: string | null;
   source_app: string | null;
+  source_app_icon: string | null;
   created_at: string;
   pinboard_id: string | null;
   is_favorite: boolean;

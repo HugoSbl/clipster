@@ -9,10 +9,11 @@ use image::imageops::FilterType;
 use image::{DynamicImage, ImageFormat};
 use std::fs;
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Default thumbnail size (max dimension)
-const THUMBNAIL_MAX_SIZE: u32 = 200;
+/// Using 400px for sharp previews on retina displays
+const THUMBNAIL_MAX_SIZE: u32 = 400;
 
 /// File storage manager for clipboard images
 pub struct FileStorage {
@@ -180,7 +181,7 @@ pub fn generate_thumbnail(image: &DynamicImage, max_size: u32) -> Result<Vec<u8>
     Ok(png_bytes)
 }
 
-/// Generate a thumbnail with default max size (200px)
+/// Generate a thumbnail with default max size (400px)
 pub fn generate_thumbnail_default(image: &DynamicImage) -> Result<Vec<u8>, String> {
     generate_thumbnail(image, THUMBNAIL_MAX_SIZE)
 }
@@ -215,6 +216,334 @@ pub fn process_clipboard_image(
     let image_path = storage.save_image(id, &image)?;
 
     Ok((thumbnail_base64, image_path))
+}
+
+/// Generate a thumbnail for a file (macOS)
+/// Uses Quick Look for documents (PDF, Word, etc.) and the image crate for images
+/// Returns PNG bytes on success, None if thumbnail cannot be generated
+#[cfg(target_os = "macos")]
+pub fn generate_file_thumbnail_macos(path: &Path, max_size: u32) -> Option<Vec<u8>> {
+    // Check if file exists and is accessible
+    if !path.exists() {
+        return None;
+    }
+
+    // For image files, use the image crate directly for best quality
+    if is_image_file_macos(path) {
+        return generate_thumbnail_from_image_file(path, max_size);
+    }
+
+    // For documents (PDF, Word, Excel, etc.), use Quick Look via qlmanage
+    generate_quicklook_thumbnail(path, max_size)
+}
+
+/// Check if a file is an image based on extension (macOS)
+#[cfg(target_os = "macos")]
+fn is_image_file_macos(path: &Path) -> bool {
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
+
+    matches!(
+        extension.as_deref(),
+        Some("jpg") | Some("jpeg") | Some("png") | Some("gif") | Some("bmp")
+        | Some("webp") | Some("ico") | Some("tiff") | Some("tif") | Some("heic") | Some("heif")
+    )
+}
+
+/// Load file as image directly using the image crate
+#[cfg(target_os = "macos")]
+fn generate_thumbnail_from_image_file(path: &Path, max_size: u32) -> Option<Vec<u8>> {
+    let image = image::open(path).ok()?;
+    generate_thumbnail(&image, max_size).ok()
+}
+
+/// Generate thumbnail using Quick Look (qlmanage command)
+/// Works for PDF, Word, Excel, PowerPoint, Pages, Keynote, Numbers, etc.
+#[cfg(target_os = "macos")]
+fn generate_quicklook_thumbnail(path: &Path, max_size: u32) -> Option<Vec<u8>> {
+    use std::process::Command;
+    use std::fs;
+
+    // Create a temporary directory for the thumbnail
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp_dir = std::env::temp_dir().join(format!("clipster_ql_{}", timestamp));
+    fs::create_dir_all(&temp_dir).ok()?;
+
+    // Use qlmanage to generate thumbnail
+    // -t = thumbnail mode
+    // -s = size
+    // -o = output directory
+    let _output = Command::new("qlmanage")
+        .args([
+            "-t",
+            "-s", &max_size.to_string(),
+            "-o", temp_dir.to_str()?,
+            path.to_str()?,
+        ])
+        .output()
+        .ok()?;
+
+    // Find the generated thumbnail file
+    // qlmanage creates files with .png extension
+    let entries = fs::read_dir(&temp_dir).ok()?;
+    let thumbnail_path = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| p.extension().map(|e| e == "png").unwrap_or(false))?;
+
+    // Read the thumbnail PNG
+    let png_data = fs::read(&thumbnail_path).ok()?;
+
+    // Clean up temp directory
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    // Verify it's a valid PNG and not too small (qlmanage might fail silently)
+    if png_data.len() < 100 {
+        return None;
+    }
+
+    Some(png_data)
+}
+
+/// Generate a thumbnail for a file on Windows
+/// For image files: uses the image crate directly
+/// For other files: extracts the file type icon using SHGetFileInfoW
+#[cfg(target_os = "windows")]
+pub fn generate_file_thumbnail_windows(path: &Path, max_size: u32) -> Option<Vec<u8>> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Graphics::Gdi::{
+        CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, SelectObject,
+        BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    };
+    use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
+    use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, ICONINFO};
+
+    if !path.exists() {
+        return None;
+    }
+
+    // For image files, use the image crate directly for best quality
+    if is_image_file(path) {
+        return generate_thumbnail_from_image_file_windows(path, max_size);
+    }
+
+    // For non-image files, extract the file type icon
+    extract_file_icon_windows(path, max_size)
+}
+
+/// Check if a file is an image based on extension
+#[cfg(target_os = "windows")]
+fn is_image_file(path: &Path) -> bool {
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
+
+    matches!(
+        extension.as_deref(),
+        Some("jpg") | Some("jpeg") | Some("png") | Some("gif") | Some("bmp") | Some("webp") | Some("ico") | Some("tiff") | Some("tif")
+    )
+}
+
+/// Generate thumbnail from image file using the image crate
+#[cfg(target_os = "windows")]
+fn generate_thumbnail_from_image_file_windows(path: &Path, max_size: u32) -> Option<Vec<u8>> {
+    let image = image::open(path).ok()?;
+    generate_thumbnail(&image, max_size).ok()
+}
+
+/// Extract file type icon using Shell API and convert to PNG
+#[cfg(target_os = "windows")]
+fn extract_file_icon_windows(path: &Path, max_size: u32) -> Option<Vec<u8>> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Graphics::Gdi::{
+        CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, SelectObject,
+        BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    };
+    use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
+    use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, ICONINFO};
+
+    unsafe {
+        // Convert path to wide string
+        let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+
+        // Get file info with icon
+        let mut file_info = SHFILEINFOW::default();
+        let result = SHGetFileInfoW(
+            windows::core::PCWSTR(wide_path.as_ptr()),
+            windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL,
+            Some(&mut file_info),
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_ICON | SHGFI_LARGEICON,
+        );
+
+        if result == 0 || file_info.hIcon.is_invalid() {
+            return None;
+        }
+
+        // Convert HICON to PNG bytes
+        let png_bytes = convert_hicon_to_png(file_info.hIcon, max_size);
+
+        // Clean up the icon
+        let _ = DestroyIcon(file_info.hIcon);
+
+        png_bytes
+    }
+}
+
+/// Convert HICON to PNG bytes
+#[cfg(target_os = "windows")]
+fn convert_hicon_to_png(hicon: windows::Win32::UI::WindowsAndMessaging::HICON, max_size: u32) -> Option<Vec<u8>> {
+    use windows::Win32::Graphics::Gdi::{
+        CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, SelectObject,
+        BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HGDIOBJ,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{GetIconInfo, ICONINFO};
+
+    unsafe {
+        // Get icon info to access the bitmap
+        let mut icon_info = ICONINFO::default();
+        if !GetIconInfo(hicon, &mut icon_info).as_bool() {
+            return None;
+        }
+
+        // Create a device context
+        let hdc = CreateCompatibleDC(None);
+        if hdc.is_invalid() {
+            if !icon_info.hbmColor.is_invalid() {
+                DeleteObject(icon_info.hbmColor);
+            }
+            if !icon_info.hbmMask.is_invalid() {
+                DeleteObject(icon_info.hbmMask);
+            }
+            return None;
+        }
+
+        // Use the color bitmap (hbmColor) if available
+        let hbitmap = if !icon_info.hbmColor.is_invalid() {
+            icon_info.hbmColor
+        } else {
+            // Fallback to mask bitmap for monochrome icons
+            icon_info.hbmMask
+        };
+
+        // Select the bitmap into the DC
+        let old_bitmap = SelectObject(hdc, hbitmap);
+
+        // Get bitmap dimensions
+        let mut bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: 0,
+                biHeight: 0,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                biSizeImage: 0,
+                biXPelsPerMeter: 0,
+                biYPelsPerMeter: 0,
+                biClrUsed: 0,
+                biClrImportant: 0,
+            },
+            bmiColors: [windows::Win32::Graphics::Gdi::RGBQUAD::default(); 1],
+        };
+
+        // First call to get dimensions
+        if GetDIBits(hdc, hbitmap, 0, 0, None, &mut bmi, DIB_RGB_COLORS) == 0 {
+            SelectObject(hdc, old_bitmap);
+            DeleteDC(hdc);
+            if !icon_info.hbmColor.is_invalid() {
+                DeleteObject(icon_info.hbmColor);
+            }
+            if !icon_info.hbmMask.is_invalid() {
+                DeleteObject(icon_info.hbmMask);
+            }
+            return None;
+        }
+
+        let width = bmi.bmiHeader.biWidth.unsigned_abs();
+        let height = bmi.bmiHeader.biHeight.unsigned_abs();
+
+        if width == 0 || height == 0 {
+            SelectObject(hdc, old_bitmap);
+            DeleteDC(hdc);
+            if !icon_info.hbmColor.is_invalid() {
+                DeleteObject(icon_info.hbmColor);
+            }
+            if !icon_info.hbmMask.is_invalid() {
+                DeleteObject(icon_info.hbmMask);
+            }
+            return None;
+        }
+
+        // Prepare for pixel extraction
+        bmi.bmiHeader.biHeight = -(height as i32); // Top-down DIB
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB.0;
+
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
+
+        // Get the actual pixel data
+        if GetDIBits(
+            hdc,
+            hbitmap,
+            0,
+            height,
+            Some(pixels.as_mut_ptr() as *mut _),
+            &mut bmi,
+            DIB_RGB_COLORS,
+        ) == 0
+        {
+            SelectObject(hdc, old_bitmap);
+            DeleteDC(hdc);
+            if !icon_info.hbmColor.is_invalid() {
+                DeleteObject(icon_info.hbmColor);
+            }
+            if !icon_info.hbmMask.is_invalid() {
+                DeleteObject(icon_info.hbmMask);
+            }
+            return None;
+        }
+
+        // Clean up GDI objects
+        SelectObject(hdc, old_bitmap);
+        DeleteDC(hdc);
+        if !icon_info.hbmColor.is_invalid() {
+            DeleteObject(icon_info.hbmColor);
+        }
+        if !icon_info.hbmMask.is_invalid() {
+            DeleteObject(icon_info.hbmMask);
+        }
+
+        // Convert BGRA to RGBA
+        for chunk in pixels.chunks_exact_mut(4) {
+            chunk.swap(0, 2); // Swap B and R
+        }
+
+        // Create image from pixels
+        let img = image::RgbaImage::from_raw(width, height, pixels)?;
+        let dynamic_img = DynamicImage::ImageRgba8(img);
+
+        // Generate thumbnail at the requested size
+        generate_thumbnail(&dynamic_img, max_size).ok()
+    }
+}
+
+/// Stub for non-macOS and non-Windows platforms - always returns None
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn generate_file_thumbnail_macos(_path: &Path, _max_size: u32) -> Option<Vec<u8>> {
+    None
+}
+
+/// Stub for non-macOS and non-Windows platforms - always returns None
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn generate_file_thumbnail_windows(_path: &Path, _max_size: u32) -> Option<Vec<u8>> {
+    None
 }
 
 #[cfg(test)]

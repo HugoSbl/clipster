@@ -53,10 +53,6 @@ const handleDelete = async (id: string) => {
   }
 };
 
-const handleToggleFavorite = async (id: string) => {
-  await store.toggleFavorite(id);
-};
-
 // Image preview
 const openImagePreview = async (item: ClipboardItem) => {
   if (item.content_type !== 'image') return;
@@ -123,12 +119,6 @@ const deleteCurrent = () => {
   }
 };
 
-const toggleFavoriteCurrent = () => {
-  if (selectedId.value) {
-    handleToggleFavorite(selectedId.value);
-  }
-};
-
 const clearSelection = () => {
   if (isModalOpen.value) {
     closeImagePreview();
@@ -143,7 +133,6 @@ defineExpose({
   navigateRight,
   selectCurrent,
   deleteCurrent,
-  toggleFavoriteCurrent,
   clearSelection,
   isModalOpen,
 });
@@ -169,15 +158,6 @@ const handleCardClick = (item: ClipboardItem) => {
 
 <template>
   <div class="timeline-container">
-    <!-- Header -->
-    <div class="timeline-header">
-      <h2>Clipboard History</h2>
-      <div class="header-info">
-        <span class="item-count">{{ store.totalCount }} items</span>
-        <span class="hint">← → navigate, Enter copy, / search</span>
-      </div>
-    </div>
-
     <!-- Loading state -->
     <div v-if="loading" class="loading-state">
       <span>Loading...</span>
@@ -214,7 +194,6 @@ const handleCardClick = (item: ClipboardItem) => {
           @select="handleCardClick"
           @copy="handleCopy"
           @delete="handleDelete"
-          @toggle-favorite="handleToggleFavorite"
         />
       </div>
     </div>
@@ -240,8 +219,10 @@ const handleCardClick = (item: ClipboardItem) => {
 .timeline-container {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   outline: none;
+  overflow: hidden;
 }
 
 /* Header */
@@ -328,40 +309,46 @@ const handleCardClick = (item: ClipboardItem) => {
   flex: 1;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 16px;
+  padding: 10px 12px;
   scroll-behavior: smooth;
   scroll-snap-type: x mandatory;
+  min-height: 0; /* Important for flex child */
 }
 
 /* Custom scrollbar */
 .timeline-scroll::-webkit-scrollbar {
-  height: 8px;
+  height: 6px;
 }
 
 .timeline-scroll::-webkit-scrollbar-track {
-  background: #f3f4f6;
-  border-radius: 4px;
+  background: transparent;
 }
 
 .timeline-scroll::-webkit-scrollbar-thumb {
-  background: #d1d5db;
-  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 3px;
 }
 
 .timeline-scroll::-webkit-scrollbar-thumb:hover {
-  background: #9ca3af;
+  background: rgba(0, 0, 0, 0.25);
 }
 
 /* Timeline Track */
 .timeline-track {
   display: flex;
-  gap: 12px;
-  padding-bottom: 8px;
+  gap: 10px;
+  height: 100%;
   min-width: max-content;
+  align-items: stretch;
+  /* Prevent drag ghost from including siblings */
+  -webkit-user-drag: none;
+  user-select: none;
 }
 
 .timeline-track > * {
   scroll-snap-align: start;
+  /* Each card is isolated for drag operations */
+  contain: layout style;
 }
 
 /* Modal styles */

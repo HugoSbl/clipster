@@ -8,6 +8,7 @@ interface PinboardState {
   activePinboardId: string | null; // null = History view
   loading: boolean;
   error: string | null;
+  isDraggingItem: boolean; // true when dragging a clipboard item
 }
 
 export const usePinboardStore = defineStore('pinboards', {
@@ -16,6 +17,7 @@ export const usePinboardStore = defineStore('pinboards', {
     activePinboardId: null,
     loading: false,
     error: null,
+    isDraggingItem: false,
   }),
 
   getters: {
@@ -156,13 +158,19 @@ export const usePinboardStore = defineStore('pinboards', {
     async addItemToPinboard(itemId: string, pinboardId: string): Promise<boolean> {
       try {
         await invoke<boolean>('add_item_to_pinboard', { itemId, pinboardId });
-        // Update local clipboard store
         const clipboardStore = useClipboardStore();
-        clipboardStore.updateItemPinboard(itemId, pinboardId);
-        // Refresh if viewing the target pinboard
-        if (this.activePinboardId === pinboardId) {
+
+        // If viewing history, remove the item from the list
+        if (this.activePinboardId === null) {
+          clipboardStore.removeItemFromList(itemId);
+        }
+        // If viewing the target pinboard, refresh to show new item
+        else if (this.activePinboardId === pinboardId) {
           await clipboardStore.fetchPinboardItems(pinboardId);
         }
+        // Update the item's pinboard_id in case it's still in memory
+        clipboardStore.updateItemPinboard(itemId, pinboardId);
+
         return true;
       } catch (e) {
         this.error = e instanceof Error ? e.message : String(e);
@@ -197,6 +205,13 @@ export const usePinboardStore = defineStore('pinboards', {
      */
     clearError(): void {
       this.error = null;
+    },
+
+    /**
+     * Set dragging state (for visual feedback on pinboard tabs)
+     */
+    setDragging(isDragging: boolean): void {
+      this.isDraggingItem = isDragging;
     },
   },
 });

@@ -3,3 +3,4 @@
 pub mod clipboard_commands;
 pub mod pinboard_commands;
 pub mod settings_commands;
+pub mod window_commands;

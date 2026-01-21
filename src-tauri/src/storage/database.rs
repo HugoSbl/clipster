@@ -69,6 +69,7 @@ impl Database {
                 thumbnail_base64 TEXT,
                 image_path TEXT,
                 source_app TEXT,
+                source_app_icon TEXT,
                 created_at TEXT NOT NULL,
                 pinboard_id TEXT,
                 is_favorite INTEGER NOT NULL DEFAULT 0,
@@ -77,6 +78,12 @@ impl Database {
             [],
         )
         .map_err(|e| format!("Failed to create clipboard_items table: {}", e))?;
+
+        // Migration: Add source_app_icon column if it doesn't exist
+        let _ = conn.execute(
+            "ALTER TABLE clipboard_items ADD COLUMN source_app_icon TEXT",
+            [],
+        );
 
         // Create pinboards table
         conn.execute(
@@ -153,8 +160,8 @@ impl Database {
 
         conn.execute(
             "INSERT INTO clipboard_items
-             (id, content_type, content_text, thumbnail_base64, image_path, source_app, created_at, pinboard_id, is_favorite)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             (id, content_type, content_text, thumbnail_base64, image_path, source_app, source_app_icon, created_at, pinboard_id, is_favorite)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 item.id,
                 item.content_type,
@@ -162,6 +169,7 @@ impl Database {
                 item.thumbnail_base64,
                 item.image_path,
                 item.source_app,
+                item.source_app_icon,
                 item.created_at.to_rfc3339(),
                 item.pinboard_id,
                 item.is_favorite as i32,
@@ -172,16 +180,17 @@ impl Database {
         Ok(())
     }
 
-    /// Get clipboard items with pagination
-    /// Returns items ordered by created_at DESC (newest first)
+    /// Get clipboard history items with pagination
+    /// Returns only items NOT in a pinboard, ordered by created_at DESC (newest first)
     pub fn get_items(&self, limit: usize, offset: usize) -> Result<Vec<ClipboardItem>, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         let mut stmt = conn
             .prepare(
                 "SELECT id, content_type, content_text, thumbnail_base64, image_path,
-                        source_app, created_at, pinboard_id, is_favorite
+                        source_app, source_app_icon, created_at, pinboard_id, is_favorite
                  FROM clipboard_items
+                 WHERE pinboard_id IS NULL
                  ORDER BY created_at DESC
                  LIMIT ?1 OFFSET ?2",
             )
@@ -205,7 +214,7 @@ impl Database {
         let mut stmt = conn
             .prepare(
                 "SELECT id, content_type, content_text, thumbnail_base64, image_path,
-                        source_app, created_at, pinboard_id, is_favorite
+                        source_app, source_app_icon, created_at, pinboard_id, is_favorite
                  FROM clipboard_items
                  WHERE id = ?1",
             )
@@ -242,7 +251,7 @@ impl Database {
         let mut stmt = conn
             .prepare(
                 "SELECT id, content_type, content_text, thumbnail_base64, image_path,
-                        source_app, created_at, pinboard_id, is_favorite
+                        source_app, source_app_icon, created_at, pinboard_id, is_favorite
                  FROM clipboard_items
                  WHERE content_text LIKE ?1
                  ORDER BY created_at DESC
@@ -272,7 +281,7 @@ impl Database {
         let mut stmt = conn
             .prepare(
                 "SELECT id, content_type, content_text, thumbnail_base64, image_path,
-                        source_app, created_at, pinboard_id, is_favorite
+                        source_app, source_app_icon, created_at, pinboard_id, is_favorite
                  FROM clipboard_items
                  WHERE content_type = ?1
                  ORDER BY created_at DESC
@@ -291,12 +300,17 @@ impl Database {
         Ok(items)
     }
 
-    /// Count total clipboard items
+    /// Count history items (unpinned only)
+    /// Pinboard items are saved permanently and not counted in history limit
     pub fn count_items(&self) -> Result<usize, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM clipboard_items", [], |row| row.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM clipboard_items WHERE pinboard_id IS NULL",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|e| format!("Failed to count items: {}", e))?;
 
         Ok(count as usize)
@@ -439,7 +453,7 @@ impl Database {
         let mut stmt = conn
             .prepare(
                 "SELECT id, content_type, content_text, thumbnail_base64, image_path,
-                        source_app, created_at, pinboard_id, is_favorite
+                        source_app, source_app_icon, created_at, pinboard_id, is_favorite
                  FROM clipboard_items
                  WHERE pinboard_id = ?1
                  ORDER BY created_at DESC
@@ -581,7 +595,7 @@ mod tests {
     fn test_insert_and_get_item() {
         let db = Database::new_in_memory().unwrap();
 
-        let item = ClipboardItem::new_text("Hello, World!".to_string(), Some("Test".to_string()));
+        let item = ClipboardItem::new_text("Hello, World!".to_string(), Some("Test".to_string()), None);
         db.insert_item(&item).unwrap();
 
         let items = db.get_items(10, 0).unwrap();
@@ -593,7 +607,7 @@ mod tests {
     fn test_delete_item() {
         let db = Database::new_in_memory().unwrap();
 
-        let item = ClipboardItem::new_text("To delete".to_string(), None);
+        let item = ClipboardItem::new_text("To delete".to_string(), None, None);
         let id = item.id.clone();
         db.insert_item(&item).unwrap();
 
@@ -607,11 +621,11 @@ mod tests {
     fn test_search_items() {
         let db = Database::new_in_memory().unwrap();
 
-        db.insert_item(&ClipboardItem::new_text("Hello World".to_string(), None))
+        db.insert_item(&ClipboardItem::new_text("Hello World".to_string(), None, None))
             .unwrap();
-        db.insert_item(&ClipboardItem::new_text("Goodbye World".to_string(), None))
+        db.insert_item(&ClipboardItem::new_text("Goodbye World".to_string(), None, None))
             .unwrap();
-        db.insert_item(&ClipboardItem::new_text("Hello Rust".to_string(), None))
+        db.insert_item(&ClipboardItem::new_text("Hello Rust".to_string(), None, None))
             .unwrap();
 
         let results = db.search_items("Hello", 10).unwrap();
@@ -630,7 +644,7 @@ mod tests {
 
         // Insert 10 items
         for i in 0..10 {
-            let item = ClipboardItem::new_text(format!("Item {}", i), None);
+            let item = ClipboardItem::new_text(format!("Item {}", i), None, None);
             db.insert_item(&item).unwrap();
         }
 
@@ -639,6 +653,43 @@ mod tests {
         // Prune to keep only 5
         db.prune_oldest(5).unwrap();
         assert_eq!(db.count_items().unwrap(), 5);
+    }
+
+    #[test]
+    fn test_prune_preserves_pinned_items() {
+        let db = Database::new_in_memory().unwrap();
+
+        // Create a pinboard
+        let pinboard = Pinboard::new("Test".to_string(), None, 0);
+        let pinboard_id = pinboard.id.clone();
+        db.insert_pinboard(&pinboard).unwrap();
+
+        // Insert 10 history items
+        for i in 0..10 {
+            let item = ClipboardItem::new_text(format!("History {}", i), None, None);
+            db.insert_item(&item).unwrap();
+        }
+
+        // Insert 5 pinned items
+        for i in 0..5 {
+            let item = ClipboardItem::new_text(format!("Pinned {}", i), None, None);
+            let item_id = item.id.clone();
+            db.insert_item(&item).unwrap();
+            db.update_item_pinboard(&item_id, Some(&pinboard_id)).unwrap();
+        }
+
+        // History count should be 10 (pinned items not counted)
+        assert_eq!(db.count_items().unwrap(), 10);
+
+        // Prune to keep only 3 history items
+        db.prune_oldest(3).unwrap();
+
+        // History count should now be 3
+        assert_eq!(db.count_items().unwrap(), 3);
+
+        // But pinned items should still exist
+        let pinboard_items = db.get_pinboard_items(&pinboard_id, 100).unwrap();
+        assert_eq!(pinboard_items.len(), 5);
     }
 
     #[test]
@@ -670,7 +721,7 @@ mod tests {
         assert_eq!(pinboards[0].name, "Work");
 
         // Add item to pinboard
-        let item = ClipboardItem::new_text("Work item".to_string(), None);
+        let item = ClipboardItem::new_text("Work item".to_string(), None, None);
         let item_id = item.id.clone();
         db.insert_item(&item).unwrap();
         db.update_item_pinboard(&item_id, Some(&pinboard_id)).unwrap();
@@ -683,7 +734,7 @@ mod tests {
     fn test_content_deduplication() {
         let db = Database::new_in_memory().unwrap();
 
-        let item = ClipboardItem::new_text("Duplicate content".to_string(), None);
+        let item = ClipboardItem::new_text("Duplicate content".to_string(), None, None);
         db.insert_item(&item).unwrap();
 
         assert!(db.content_exists("Duplicate content").unwrap());

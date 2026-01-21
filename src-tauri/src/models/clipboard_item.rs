@@ -10,6 +10,8 @@ pub enum ContentType {
     Text,
     Image,
     Files,
+    Link,
+    Audio,
 }
 
 impl ContentType {
@@ -18,6 +20,8 @@ impl ContentType {
             ContentType::Text => "text",
             ContentType::Image => "image",
             ContentType::Files => "files",
+            ContentType::Link => "link",
+            ContentType::Audio => "audio",
         }
     }
 
@@ -26,7 +30,56 @@ impl ContentType {
             "text" => Some(ContentType::Text),
             "image" => Some(ContentType::Image),
             "files" => Some(ContentType::Files),
+            "link" => Some(ContentType::Link),
+            "audio" => Some(ContentType::Audio),
             _ => None,
+        }
+    }
+
+    /// Check if text content looks like a URL
+    pub fn detect_from_text(text: &str) -> Self {
+        let trimmed = text.trim();
+
+        // Check if it's a URL
+        if Self::is_url(trimmed) {
+            return ContentType::Link;
+        }
+
+        ContentType::Text
+    }
+
+    /// Check if text is a URL
+    fn is_url(text: &str) -> bool {
+        let lower = text.to_lowercase();
+        // Must start with a protocol or www
+        if lower.starts_with("http://")
+            || lower.starts_with("https://")
+            || lower.starts_with("ftp://")
+            || lower.starts_with("file://")
+            || lower.starts_with("www.")
+        {
+            // Basic validation: no newlines and contains a dot
+            !text.contains('\n') && text.contains('.')
+        } else {
+            false
+        }
+    }
+
+    /// Check if file paths contain audio files
+    pub fn detect_from_files(paths: &[String]) -> Self {
+        let audio_extensions = [
+            "mp3", "wav", "flac", "aac", "ogg", "wma", "m4a", "aiff", "alac", "opus"
+        ];
+
+        let all_audio = !paths.is_empty() && paths.iter().all(|path| {
+            let lower = path.to_lowercase();
+            audio_extensions.iter().any(|ext| lower.ends_with(&format!(".{}", ext)))
+        });
+
+        if all_audio {
+            ContentType::Audio
+        } else {
+            ContentType::Files
         }
     }
 }
@@ -70,6 +123,10 @@ pub struct ClipboardItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_app: Option<String>,
 
+    /// Source application icon as base64-encoded PNG
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_app_icon: Option<String>,
+
     /// Timestamp when item was captured
     pub created_at: DateTime<Utc>,
 
@@ -83,15 +140,33 @@ pub struct ClipboardItem {
 }
 
 impl ClipboardItem {
-    /// Create a new text clipboard item
-    pub fn new_text(text: String, source_app: Option<String>) -> Self {
+    /// Create a new text clipboard item (auto-detects if it's a URL)
+    pub fn new_text(text: String, source_app: Option<String>, source_app_icon: Option<String>) -> Self {
+        let content_type = ContentType::detect_from_text(&text);
         Self {
             id: uuid::Uuid::new_v4().to_string(),
-            content_type: ContentType::Text,
+            content_type,
             content_text: Some(text),
             thumbnail_base64: None,
             image_path: None,
             source_app,
+            source_app_icon,
+            created_at: Utc::now(),
+            pinboard_id: None,
+            is_favorite: false,
+        }
+    }
+
+    /// Create a new link clipboard item
+    pub fn new_link(url: String, source_app: Option<String>, source_app_icon: Option<String>) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            content_type: ContentType::Link,
+            content_text: Some(url),
+            thumbnail_base64: None,
+            image_path: None,
+            source_app,
+            source_app_icon,
             created_at: Utc::now(),
             pinboard_id: None,
             is_favorite: false,
@@ -103,6 +178,7 @@ impl ClipboardItem {
         thumbnail_base64: String,
         image_path: String,
         source_app: Option<String>,
+        source_app_icon: Option<String>,
     ) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
@@ -111,22 +187,52 @@ impl ClipboardItem {
             thumbnail_base64: Some(thumbnail_base64),
             image_path: Some(image_path),
             source_app,
+            source_app_icon,
             created_at: Utc::now(),
             pinboard_id: None,
             is_favorite: false,
         }
     }
 
-    /// Create a new files clipboard item
-    pub fn new_files(file_paths: Vec<String>, source_app: Option<String>) -> Self {
+    /// Create a new files clipboard item (auto-detects if all files are audio)
+    pub fn new_files(file_paths: Vec<String>, source_app: Option<String>, source_app_icon: Option<String>) -> Self {
+        Self::new_files_with_thumbnail(file_paths, source_app, source_app_icon, None)
+    }
+
+    /// Create a new files clipboard item with optional thumbnail
+    pub fn new_files_with_thumbnail(
+        file_paths: Vec<String>,
+        source_app: Option<String>,
+        source_app_icon: Option<String>,
+        thumbnail_base64: Option<String>,
+    ) -> Self {
+        let content_type = ContentType::detect_from_files(&file_paths);
         let paths_json = serde_json::to_string(&file_paths).unwrap_or_default();
         Self {
             id: uuid::Uuid::new_v4().to_string(),
-            content_type: ContentType::Files,
+            content_type,
+            content_text: Some(paths_json),
+            thumbnail_base64,
+            image_path: None,
+            source_app,
+            source_app_icon,
+            created_at: Utc::now(),
+            pinboard_id: None,
+            is_favorite: false,
+        }
+    }
+
+    /// Create a new audio files clipboard item
+    pub fn new_audio(file_paths: Vec<String>, source_app: Option<String>, source_app_icon: Option<String>) -> Self {
+        let paths_json = serde_json::to_string(&file_paths).unwrap_or_default();
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            content_type: ContentType::Audio,
             content_text: Some(paths_json),
             thumbnail_base64: None,
             image_path: None,
             source_app,
+            source_app_icon,
             created_at: Utc::now(),
             pinboard_id: None,
             is_favorite: false,
@@ -157,6 +263,7 @@ impl ClipboardItem {
             thumbnail_base64: row.get("thumbnail_base64")?,
             image_path: row.get("image_path")?,
             source_app: row.get("source_app")?,
+            source_app_icon: row.get("source_app_icon")?,
             created_at,
             pinboard_id: row.get("pinboard_id")?,
             is_favorite: row.get::<_, i32>("is_favorite")? != 0,
@@ -174,6 +281,26 @@ impl ClipboardItem {
                     text.to_string()
                 }
             }
+            ContentType::Link => {
+                let url = self.content_text.as_deref().unwrap_or("");
+                // Extract domain for preview
+                if let Some(start) = url.find("://") {
+                    let after_proto = &url[start + 3..];
+                    if let Some(end) = after_proto.find('/') {
+                        after_proto[..end].to_string()
+                    } else {
+                        after_proto.to_string()
+                    }
+                } else if url.starts_with("www.") {
+                    if let Some(end) = url[4..].find('/') {
+                        url[..4 + end].to_string()
+                    } else {
+                        url.to_string()
+                    }
+                } else {
+                    url.to_string()
+                }
+            }
             ContentType::Image => "[Image]".to_string(),
             ContentType::Files => {
                 if let Some(paths) = self.get_file_paths() {
@@ -184,6 +311,22 @@ impl ClipboardItem {
                     }
                 } else {
                     "[Files]".to_string()
+                }
+            }
+            ContentType::Audio => {
+                if let Some(paths) = self.get_file_paths() {
+                    if paths.len() == 1 {
+                        // Get just the filename
+                        paths[0]
+                            .rsplit(['/', '\\'])
+                            .next()
+                            .unwrap_or(&paths[0])
+                            .to_string()
+                    } else {
+                        format!("{} audio files", paths.len())
+                    }
+                } else {
+                    "[Audio]".to_string()
                 }
             }
         }
@@ -199,20 +342,58 @@ mod tests {
         assert_eq!(ContentType::Text.as_str(), "text");
         assert_eq!(ContentType::Image.as_str(), "image");
         assert_eq!(ContentType::Files.as_str(), "files");
+        assert_eq!(ContentType::Link.as_str(), "link");
+        assert_eq!(ContentType::Audio.as_str(), "audio");
     }
 
     #[test]
     fn test_new_text_item() {
-        let item = ClipboardItem::new_text("Hello".to_string(), Some("Notepad".to_string()));
+        let item = ClipboardItem::new_text("Hello".to_string(), Some("Notepad".to_string()), None);
         assert_eq!(item.content_type, ContentType::Text);
         assert_eq!(item.content_text, Some("Hello".to_string()));
         assert_eq!(item.source_app, Some("Notepad".to_string()));
     }
 
     #[test]
+    fn test_url_detection() {
+        let item = ClipboardItem::new_text("https://github.com/rust-lang".to_string(), None, None);
+        assert_eq!(item.content_type, ContentType::Link);
+
+        let item = ClipboardItem::new_text("http://example.com".to_string(), None, None);
+        assert_eq!(item.content_type, ContentType::Link);
+
+        let item = ClipboardItem::new_text("www.google.com".to_string(), None, None);
+        assert_eq!(item.content_type, ContentType::Link);
+
+        // Plain text should stay as Text
+        let item = ClipboardItem::new_text("Hello world".to_string(), None, None);
+        assert_eq!(item.content_type, ContentType::Text);
+
+        // Multiline should not be detected as URL
+        let item = ClipboardItem::new_text("https://example.com\nmore text".to_string(), None, None);
+        assert_eq!(item.content_type, ContentType::Text);
+    }
+
+    #[test]
+    fn test_audio_detection() {
+        let paths = vec!["/music/song.mp3".to_string()];
+        let item = ClipboardItem::new_files(paths, None, None);
+        assert_eq!(item.content_type, ContentType::Audio);
+
+        let paths = vec!["/music/track1.wav".to_string(), "/music/track2.flac".to_string()];
+        let item = ClipboardItem::new_files(paths, None, None);
+        assert_eq!(item.content_type, ContentType::Audio);
+
+        // Mixed files should be Files, not Audio
+        let paths = vec!["/doc.pdf".to_string(), "/song.mp3".to_string()];
+        let item = ClipboardItem::new_files(paths, None, None);
+        assert_eq!(item.content_type, ContentType::Files);
+    }
+
+    #[test]
     fn test_file_paths() {
         let paths = vec!["C:\\file1.txt".to_string(), "C:\\file2.txt".to_string()];
-        let item = ClipboardItem::new_files(paths.clone(), None);
+        let item = ClipboardItem::new_files(paths.clone(), None, None);
         assert_eq!(item.get_file_paths(), Some(paths));
     }
 }

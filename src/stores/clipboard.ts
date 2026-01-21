@@ -292,5 +292,16 @@ export const useClipboardStore = defineStore('clipboard', {
         item.pinboard_id = pinboardId;
       }
     },
+
+    /**
+     * Remove item from the current list (used when item is moved to a pinboard)
+     */
+    removeItemFromList(itemId: string): void {
+      const index = this.items.findIndex((i) => i.id === itemId);
+      if (index !== -1) {
+        this.items.splice(index, 1);
+        this.totalCount = Math.max(0, this.totalCount - 1);
+      }
+    },
   },
 });

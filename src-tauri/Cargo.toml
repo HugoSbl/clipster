@@ -1,32 +1,25 @@
 [package]
-name = "clipster-windows"
+name = "clipster"
 version = "0.1.0"
-description = "A Clipboard app made with Tauri"
+description = "A cross-platform Clipboard manager made with Tauri"
 authors = ["hugosblt"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "clipster_windows_lib"
+name = "clipster_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-shell = "2"
 tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-# Clipboard monitoring and multi-format reading
-clipboard-master = "3.1"
-clipboard-win = "5.0"
 
 # SQLite database
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -40,17 +33,37 @@ base64 = "0.22"
 # Image processing (for thumbnails)
 image = "0.24"
 
-[dependencies.windows]
-version = "0.58.0"
-features = [
+# Cross-platform clipboard (arboard works on Windows, macOS, Linux)
+arboard = "3.4"
+
+# Windows-specific dependencies
+[target.'cfg(target_os = "windows")'.dependencies]
+clipboard-master = "3.1"
+clipboard-win = "5.0"
+windows = { version = "0.58.0", features = [
     "Data_Xml_Dom",
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
     "Win32_UI_WindowsAndMessaging",
-    # Clipboard features for multi-format support
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_Graphics_Gdi",
-]
+    "Win32_UI_Shell",
+    "Win32_Storage_FileSystem",
+] }
+
+# macOS-specific dependencies
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-app-kit = { version = "0.2", features = ["NSPasteboard", "NSPasteboardItem", "NSWorkspace", "NSRunningApplication", "NSImage", "NSBitmapImageRep", "NSImageRep", "NSGraphicsContext", "NSGraphics"] }
+objc2-quartz-core = { version = "0.2" }
+objc2-foundation = { version = "0.2", features = ["NSString", "NSArray", "NSURL"] }
+# For Quick Look file thumbnails
+core-graphics = "0.24"
+core-foundation = "0.10"
+foreign-types-shared = "0.3"
+# Window vibrancy effects
+window-vibrancy = "0.5"

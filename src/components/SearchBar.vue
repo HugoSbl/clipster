@@ -98,7 +98,7 @@ onUnmounted(() => {
         ref="inputRef"
         type="text"
         :value="inputValue"
-        :placeholder="placeholder || 'Search clipboard history... (press / to focus)'"
+        :placeholder="placeholder || 'Search...'"
         class="search-input"
         @input="handleInput"
         @keydown="handleKeyDown"
@@ -109,7 +109,7 @@ onUnmounted(() => {
         v-if="inputValue"
         class="clear-btn"
         @click="clearSearch"
-        title="Clear search (Esc)"
+        title="Clear (Esc)"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18" />
@@ -117,18 +117,12 @@ onUnmounted(() => {
         </svg>
       </button>
     </div>
-
-    <!-- Search hint -->
-    <div v-if="inputValue" class="search-hint">
-      Press <kbd>Esc</kbd> to clear
-    </div>
   </div>
 </template>
 
 <style scoped>
 .search-bar {
-  padding: 12px 16px;
-  border-bottom: 1px solid #e5e7eb;
+  width: 280px;
 }
 
 .search-input-wrapper {
@@ -139,24 +133,24 @@ onUnmounted(() => {
 
 .search-icon {
   position: absolute;
-  left: 12px;
-  width: 18px;
-  height: 18px;
+  left: 10px;
+  width: 14px;
+  height: 14px;
   color: #9ca3af;
   pointer-events: none;
 }
 
 .search-input {
   width: 100%;
-  height: 40px;
-  padding: 0 40px 0 40px;
-  border: 1px solid #e5e7eb;
+  height: 32px;
+  padding: 0 32px 0 32px;
+  border: none;
   border-radius: 8px;
-  font-size: 14px;
-  color: #1f2937;
-  background: #f9fafb;
+  font-size: 13px;
+  color: #374151;
+  background: rgba(0, 0, 0, 0.06);
   outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
+  transition: background-color 0.15s, box-shadow 0.15s;
 }
 
 .search-input::placeholder {
@@ -164,23 +158,22 @@ onUnmounted(() => {
 }
 
 .search-input:hover {
-  border-color: #d1d5db;
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .search-input:focus {
-  border-color: #3b82f6;
-  background: white;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1);
 }
 
 .clear-btn {
   position: absolute;
-  right: 8px;
-  width: 28px;
-  height: 28px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: none;
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   color: #9ca3af;
   cursor: pointer;
@@ -191,63 +184,12 @@ onUnmounted(() => {
 }
 
 .clear-btn:hover {
-  background: #f3f4f6;
+  background: rgba(0, 0, 0, 0.08);
   color: #6b7280;
 }
 
 .clear-btn svg {
-  width: 16px;
-  height: 16px;
-}
-
-.search-hint {
-  margin-top: 6px;
-  font-size: 11px;
-  color: #9ca3af;
-  text-align: right;
-}
-
-.search-hint kbd {
-  display: inline-block;
-  padding: 2px 6px;
-  font-size: 10px;
-  font-family: inherit;
-  background: #f3f4f6;
-  border: 1px solid #e5e7eb;
-  border-radius: 4px;
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
-}
-
-/* Dark mode */
-@media (prefers-color-scheme: dark) {
-  .search-bar {
-    border-bottom-color: #374151;
-  }
-
-  .search-input {
-    border-color: #374151;
-    background: #1f2937;
-    color: #f3f4f6;
-  }
-
-  .search-input:hover {
-    border-color: #4b5563;
-  }
-
-  .search-input:focus {
-    border-color: #60a5fa;
-    background: #111827;
-    box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.1);
-  }
-
-  .clear-btn:hover {
-    background: #374151;
-    color: #d1d5db;
-  }
-
-  .search-hint kbd {
-    background: #374151;
-    border-color: #4b5563;
-  }
+  width: 12px;
+  height: 12px;
 }
 </style>

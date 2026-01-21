@@ -1,10 +1,10 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod clipboard;
 mod commands;
 mod models;
 mod storage;
-mod windows_api;
 
 use commands::clipboard_commands::{
     assign_to_pinboard, clear_clipboard_history, copy_to_clipboard, delete_clipboard_item,
@@ -18,13 +18,14 @@ use commands::pinboard_commands::{
 use commands::settings_commands::{
     get_history_limit, get_settings, set_history_limit, update_setting,
 };
+use commands::window_commands::{hide_window, show_window};
 use std::sync::Arc;
 use storage::Database;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
-use windows_api::clipboard_monitor;
+use clipboard::clipboard_monitor;
 
 /// Application state holding the database connection
 pub struct AppState {
@@ -127,6 +128,67 @@ fn main() {
 
             println!("System tray created");
 
+            // Configure window size and position based on primary monitor
+            if let Some(window) = app.get_webview_window("main") {
+                if let Ok(Some(monitor)) = window.primary_monitor() {
+                    let size = monitor.size();
+                    let scale = monitor.scale_factor();
+
+                    // Calculate dimensions: full width, 1/3 height
+                    let width = size.width as f64 / scale;
+                    let height = (size.height as f64 / scale) * 0.33;
+
+                    // Position at bottom of screen (above dock area)
+                    let y = (size.height as f64 / scale) - height;
+
+                    // Apply size and position
+                    if let Err(e) = window.set_size(tauri::LogicalSize::new(width, height)) {
+                        eprintln!("Failed to set window size: {}", e);
+                    }
+                    if let Err(e) = window.set_position(tauri::LogicalPosition::new(0.0, y)) {
+                        eprintln!("Failed to set window position: {}", e);
+                    }
+
+                    println!("Window configured: {}x{} at y={}", width, height, y);
+                } else {
+                    eprintln!("Could not get primary monitor");
+                }
+
+                // Apply vibrancy effect and window level on macOS
+                #[cfg(target_os = "macos")]
+                {
+                    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+
+                    // Apply vibrancy
+                    let _ = apply_vibrancy(&window, NSVisualEffectMaterial::HudWindow, None, Some(16.0));
+                    println!("Applied vibrancy effect");
+
+                    // Set window level and collection behavior for full-screen support
+                    if let Ok(ns_window) = window.ns_window() {
+                        unsafe {
+                            use objc2::runtime::AnyObject;
+                            use objc2::msg_send;
+                            let ns_win: *mut AnyObject = ns_window as *mut AnyObject;
+
+                            // kCGDockWindowLevel = 20, we use 25 to be above it
+                            let _: () = msg_send![ns_win, setLevel: 25_i64];
+                            println!("Window level set above dock");
+
+                            // Set collection behavior to appear on all spaces including full-screen
+                            // NSWindowCollectionBehaviorCanJoinAllSpaces = 1 << 0
+                            // NSWindowCollectionBehaviorFullScreenAuxiliary = 1 << 8
+                            // NSWindowCollectionBehaviorStationary = 1 << 4 (stays in place during Mission Control)
+                            let behavior: u64 = (1 << 0) | (1 << 8) | (1 << 4);
+                            let _: () = msg_send![ns_win, setCollectionBehavior: behavior];
+                            println!("Window collection behavior set for all spaces");
+                        }
+                    }
+                }
+
+                // Show window after configuration
+                let _ = window.show();
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -157,6 +219,9 @@ fn main() {
             update_setting,
             get_history_limit,
             set_history_limit,
+            // Window commands
+            hide_window,
+            show_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

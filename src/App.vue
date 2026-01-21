@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useClipboardStore } from '@/stores/clipboard';
 import { usePinboardStore } from '@/stores/pinboards';
 import { useSettingsStore } from '@/stores/settings';
@@ -19,8 +21,24 @@ const settingsStore = useSettingsStore();
 const searchBarRef = ref<InstanceType<typeof SearchBar> | null>(null);
 const timelineRef = ref<InstanceType<typeof Timeline> | null>(null);
 
+// Animation state
+const isHiding = ref(false);
+
 let unlistenFn: UnlistenFn | null = null;
 let unlistenSettings: UnlistenFn | null = null;
+let unlistenBlur: UnlistenFn | null = null;
+
+// Hide window with slide-down animation
+const hideWithAnimation = async () => {
+  if (isHiding.value) return;
+  isHiding.value = true;
+
+  // Wait for animation to complete (300ms)
+  setTimeout(async () => {
+    await invoke('hide_window');
+    isHiding.value = false;
+  }, 280);
+};
 
 onMounted(async () => {
   // Fetch pinboards, settings, and initial history
@@ -36,6 +54,14 @@ onMounted(async () => {
   // Listen for tray settings event
   unlistenSettings = await listen('open-settings', () => {
     settingsStore.openSettings();
+  });
+
+  // Listen for window blur (focus lost) - hide with animation
+  const appWindow = getCurrentWindow();
+  unlistenBlur = await appWindow.onFocusChanged(({ payload: focused }) => {
+    if (!focused && !settingsStore.showModal) {
+      hideWithAnimation();
+    }
   });
 });
 
@@ -59,6 +85,9 @@ onUnmounted(() => {
   }
   if (unlistenSettings) {
     unlistenSettings();
+  }
+  if (unlistenBlur) {
+    unlistenBlur();
   }
 });
 
@@ -87,20 +116,19 @@ useKeyboard({
   onEscape: () => {
     timelineRef.value?.clearSelection();
   },
-  onToggleFavorite: () => {
-    timelineRef.value?.toggleFavoriteCurrent();
-  },
 });
 </script>
 
 <template>
-  <main class="app-container">
-    <PinboardTabs />
-    <SearchBar
-      ref="searchBarRef"
-      :model-value="clipboardStore.searchQuery"
-      @search="handleSearch"
-    />
+  <main class="app-container" :class="{ 'slide-down': isHiding }">
+    <div class="top-bar">
+      <PinboardTabs />
+      <SearchBar
+        ref="searchBarRef"
+        :model-value="clipboardStore.searchQuery"
+        @search="handleSearch"
+      />
+    </div>
     <Timeline ref="timelineRef" />
     <Settings />
   </main>
@@ -115,7 +143,7 @@ useKeyboard({
   font-weight: 400;
 
   color: #1f2937;
-  background-color: #f9fafb;
+  background-color: transparent;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -135,6 +163,7 @@ body,
   height: 100%;
   width: 100%;
   overflow: hidden;
+  background-color: transparent;
 }
 
 .app-container {
@@ -142,6 +171,27 @@ body,
   width: 100%;
   display: flex;
   flex-direction: column;
+  background: rgba(250, 248, 245, 0.92);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  transform: translateY(0);
+  transition: transform 0.28s cubic-bezier(0.4, 0, 0.6, 1);
+  overflow: hidden;
+}
+
+.top-bar {
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  flex-shrink: 0;
+}
+
+.app-container.slide-down {
+  transform: translateY(100%);
 }
 
 /* Global button reset */
@@ -150,11 +200,8 @@ button {
   cursor: pointer;
 }
 
-/* Dark mode */
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f3f4f6;
-    background-color: #111827;
-  }
+/* Light mode text color */
+:root {
+  color: #374151;
 }
 </style>

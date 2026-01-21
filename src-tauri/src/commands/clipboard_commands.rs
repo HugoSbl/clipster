@@ -1,18 +1,14 @@
+use crate::clipboard::clipboard_reader;
 use crate::models::ClipboardItem;
-use crate::windows_api::windows_api;
 use crate::AppState;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use clipboard_win::{formats, set_clipboard};
 use std::fs;
 use tauri::State;
 
 /// Get current clipboard text (legacy command)
 #[tauri::command]
 pub fn get_clipboard() -> Result<String, String> {
-    match windows_api::get_clipboard_datas() {
-        Ok(text) => Ok(text),
-        Err(e) => Err(e),
-    }
+    clipboard_reader::get_clipboard_text()
 }
 
 /// Get clipboard history with pagination
@@ -74,20 +70,19 @@ pub fn copy_to_clipboard(
         .ok_or_else(|| "Item not found".to_string())?;
 
     match item.content_type {
-        crate::models::ContentType::Text => {
+        crate::models::ContentType::Text | crate::models::ContentType::Link => {
             if let Some(text) = &item.content_text {
-                set_clipboard(formats::Unicode, text)
-                    .map_err(|e| format!("Failed to copy to clipboard: {}", e))?;
+                clipboard_reader::set_clipboard_text(text)?;
             } else {
                 return Err("No text content in item".to_string());
             }
         }
         crate::models::ContentType::Image => {
-            // TODO: Implement image copy in Task 9
+            // TODO: Implement image copy
             return Err("Image copy not yet implemented".to_string());
         }
-        crate::models::ContentType::Files => {
-            // TODO: Implement file copy in Task 9
+        crate::models::ContentType::Files | crate::models::ContentType::Audio => {
+            // TODO: Implement file copy
             return Err("File copy not yet implemented".to_string());
         }
     }
