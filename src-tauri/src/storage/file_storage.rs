@@ -230,7 +230,7 @@ pub fn process_clipboard_image(
 }
 
 /// Generate a thumbnail for a file (macOS)
-/// Uses Quick Look for documents (PDF, Word, etc.) and the image crate for images
+/// Uses Quick Look for documents (PDF, Word, etc.) and videos, and the image crate for images
 /// Returns PNG bytes on success, None if thumbnail cannot be generated
 #[cfg(target_os = "macos")]
 pub fn generate_file_thumbnail_macos(path: &Path, max_size: u32) -> Option<Vec<u8>> {
@@ -242,6 +242,18 @@ pub fn generate_file_thumbnail_macos(path: &Path, max_size: u32) -> Option<Vec<u
     // For image files, use the image crate directly for best quality
     if is_image_file_macos(path) {
         return generate_thumbnail_from_image_file(path, max_size);
+    }
+
+    // For video files, use Quick Look to extract a frame thumbnail
+    if is_video_file(path) {
+        eprintln!("[generate_file_thumbnail_macos] Processing video file: {:?}", path.file_name());
+        let result = generate_quicklook_thumbnail(path, max_size);
+        if result.is_some() {
+            eprintln!("[generate_file_thumbnail_macos] Video thumbnail generated successfully");
+        } else {
+            eprintln!("[generate_file_thumbnail_macos] Video thumbnail generation failed");
+        }
+        return result;
     }
 
     // For documents (PDF, Word, Excel, etc.), use Quick Look via qlmanage
@@ -260,6 +272,22 @@ fn is_image_file_macos(path: &Path) -> bool {
         extension.as_deref(),
         Some("jpg") | Some("jpeg") | Some("png") | Some("gif") | Some("bmp")
         | Some("webp") | Some("ico") | Some("tiff") | Some("tif") | Some("heic") | Some("heif")
+    )
+}
+
+/// Check if a file is a video based on extension (macOS)
+/// Videos are handled by Quick Look which can extract a frame thumbnail
+#[cfg(target_os = "macos")]
+fn is_video_file(path: &Path) -> bool {
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
+
+    matches!(
+        extension.as_deref(),
+        Some("mp4") | Some("mov") | Some("avi") | Some("mkv") | Some("webm")
+        | Some("m4v") | Some("wmv") | Some("flv") | Some("3gp") | Some("mpg") | Some("mpeg")
     )
 }
 
