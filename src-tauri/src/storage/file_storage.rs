@@ -52,9 +52,20 @@ impl FileStorage {
     pub fn save_image(&self, id: &str, image: &DynamicImage) -> Result<PathBuf, String> {
         let path = self.get_image_path(id);
 
+        eprintln!("[DEBUG file_storage.save_image]");
+        eprintln!("  id: {}", id);
+        eprintln!("  path: {:?}", path);
+        eprintln!("  image dimensions: {}x{}", image.width(), image.height());
+        eprintln!("  color type: {:?}", image.color());
+
         image
             .save_with_format(&path, ImageFormat::Png)
             .map_err(|e| format!("Failed to save image: {}", e))?;
+
+        // Verify what was saved
+        if let Ok(meta) = std::fs::metadata(&path) {
+            eprintln!("  SAVED OK: {} bytes", meta.len());
+        }
 
         Ok(path)
     }
@@ -259,12 +270,43 @@ fn generate_thumbnail_from_image_file(path: &Path, max_size: u32) -> Option<Vec<
     generate_thumbnail(&image, max_size).ok()
 }
 
+/// Check if Quick Look supports this file type
+/// Skip code files and other types that qlmanage hangs on
+#[cfg(target_os = "macos")]
+fn is_quicklook_supported(path: &Path) -> bool {
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
+
+    // Skip code files and other types that Quick Look doesn't handle well
+    let unsupported = matches!(
+        extension.as_deref(),
+        Some("ts") | Some("tsx") | Some("js") | Some("jsx") | Some("rs") | Some("py")
+        | Some("rb") | Some("go") | Some("java") | Some("c") | Some("cpp") | Some("h")
+        | Some("cs") | Some("php") | Some("swift") | Some("kt") | Some("scala")
+        | Some("vue") | Some("svelte") | Some("json") | Some("yaml") | Some("yml")
+        | Some("toml") | Some("xml") | Some("csv") | Some("sql") | Some("sh") | Some("bash")
+        | Some("zsh") | Some("fish") | Some("ps1") | Some("bat") | Some("cmd")
+        | Some("lock") | Some("log") | Some("env") | Some("gitignore") | Some("dockerignore")
+    );
+
+    !unsupported
+}
+
 /// Generate thumbnail using Quick Look (qlmanage command)
 /// Works for PDF, Word, Excel, PowerPoint, Pages, Keynote, Numbers, etc.
 #[cfg(target_os = "macos")]
 fn generate_quicklook_thumbnail(path: &Path, max_size: u32) -> Option<Vec<u8>> {
-    use std::process::Command;
+    use std::process::{Command, Stdio};
     use std::fs;
+    use std::time::Duration;
+
+    // Skip unsupported file types to avoid qlmanage hanging
+    if !is_quicklook_supported(path) {
+        eprintln!("[generate_quicklook_thumbnail] Skipping unsupported file type: {:?}", path.extension());
+        return None;
+    }
 
     // Create a temporary directory for the thumbnail
     let timestamp = std::time::SystemTime::now()
@@ -274,19 +316,43 @@ fn generate_quicklook_thumbnail(path: &Path, max_size: u32) -> Option<Vec<u8>> {
     let temp_dir = std::env::temp_dir().join(format!("clipster_ql_{}", timestamp));
     fs::create_dir_all(&temp_dir).ok()?;
 
-    // Use qlmanage to generate thumbnail
+    // Use qlmanage to generate thumbnail with timeout
     // -t = thumbnail mode
     // -s = size
     // -o = output directory
-    let _output = Command::new("qlmanage")
+    let mut child = Command::new("qlmanage")
         .args([
             "-t",
             "-s", &max_size.to_string(),
             "-o", temp_dir.to_str()?,
             path.to_str()?,
         ])
-        .output()
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
+
+    // Wait with timeout (3 seconds max)
+    let timeout = Duration::from_secs(3);
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => break, // Process finished
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    eprintln!("[generate_quicklook_thumbnail] Timeout - killing qlmanage");
+                    let _ = child.kill();
+                    let _ = fs::remove_dir_all(&temp_dir);
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => {
+                let _ = fs::remove_dir_all(&temp_dir);
+                return None;
+            }
+        }
+    }
 
     // Find the generated thumbnail file
     // qlmanage creates files with .png extension

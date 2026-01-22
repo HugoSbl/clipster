@@ -346,8 +346,7 @@ const handleCardClick = (item: ClipboardItem) => {
   height: 100%;
   min-width: max-content;
   align-items: stretch;
-  /* Prevent drag ghost from including siblings */
-  -webkit-user-drag: none;
+  /* Ghost artifact fix is handled by createExactClone() in ClipboardCard.vue */
   user-select: none;
 }
 

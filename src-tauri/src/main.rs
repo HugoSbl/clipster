@@ -9,7 +9,7 @@ mod storage;
 use commands::clipboard_commands::{
     assign_to_pinboard, clear_clipboard_history, copy_to_clipboard, delete_clipboard_item,
     get_clipboard, get_clipboard_count, get_clipboard_history, get_clipboard_item,
-    get_image_data, search_clipboard, toggle_favorite,
+    get_image_data, prepare_image_for_drag, search_clipboard, toggle_favorite,
 };
 use commands::pinboard_commands::{
     add_item_to_pinboard, create_pinboard, delete_pinboard, get_pinboard, get_pinboard_items,
@@ -57,6 +57,7 @@ fn main() {
     let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyV);
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_drag::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut_pressed, _event| {
@@ -204,6 +205,7 @@ fn main() {
             assign_to_pinboard,
             get_clipboard_count,
             get_image_data,
+            prepare_image_for_drag,
             // Pinboard commands
             get_pinboards,
             get_pinboard,

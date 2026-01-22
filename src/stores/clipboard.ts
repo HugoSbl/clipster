@@ -208,9 +208,12 @@ export const useClipboardStore = defineStore('clipboard', {
      * Returns unlisten function for cleanup
      */
     async setupEventListener(): Promise<UnlistenFn> {
+      console.log('[ClipboardStore] Setting up clipboard-changed event listener');
       return await listen<ClipboardChangedPayload>('clipboard-changed', (event) => {
-        console.log('Clipboard changed:', event.payload.item);
+        console.log('[ClipboardStore] Received clipboard-changed event:', event.payload.item);
+        console.log('[ClipboardStore] Current items count before add:', this.items.length);
         this.addItem(event.payload.item);
+        console.log('[ClipboardStore] Items count after add:', this.items.length);
       });
     },
 

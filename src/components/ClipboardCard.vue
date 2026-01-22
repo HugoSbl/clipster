@@ -2,6 +2,8 @@
 import { computed, ref } from 'vue';
 import type { ClipboardItem } from '@/types';
 import { usePinboardStore } from '@/stores/pinboards';
+import { startDrag } from '@crabnebula/tauri-plugin-drag';
+import { invoke } from '@tauri-apps/api/core';
 
 const props = defineProps<{
   item: ClipboardItem;
@@ -212,15 +214,236 @@ const createExactClone = (): HTMLElement | null => {
   return clone;
 };
 
-// Native HTML5 drag handlers
+// Sanitize a string to be safe for filenames
+const sanitizeFilename = (name: string): string => {
+  return name
+    .replace(/[<>:"/\\|?*]/g, '')
+    .replace(/\s+/g, '_')
+    .substring(0, 50);
+};
+
+// Generate a readable filename from item metadata
+const generateReadableFilename = (item: ClipboardItem): string => {
+  const sourceApp = item.source_app ? sanitizeFilename(item.source_app) : 'Image';
+  const date = new Date(item.created_at);
+  const timestamp = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+    '_',
+    String(date.getHours()).padStart(2, '0'),
+    String(date.getMinutes()).padStart(2, '0'),
+    String(date.getSeconds()).padStart(2, '0'),
+  ].join('');
+
+  const extension = item.image_path?.split('.').pop() || 'png';
+  return `${sourceApp}_${timestamp}.${extension}`;
+};
+
+// Prepare image for drag by copying to temp with readable name
+// Returns { imagePath, iconPath } for separate drag item and icon
+const prepareImageForDrag = async (
+  item: ClipboardItem
+): Promise<{ imagePath: string; iconPath: string } | null> => {
+  console.log('═══════════════════════════════════════════════════════════');
+  console.log('[DEBUG prepareImageForDrag] CALLED');
+  console.log('[DEBUG]   item.id:', item.id);
+  console.log('[DEBUG]   item.content_type:', item.content_type);
+  console.log('[DEBUG]   item.image_path:', item.image_path);
+
+  if (!item.image_path) {
+    console.log('[DEBUG]   No image_path, returning null');
+    return null;
+  }
+
+  try {
+    const readableFilename = generateReadableFilename(item);
+    console.log('[DEBUG]   readableFilename:', readableFilename);
+    console.log('[DEBUG]   Calling Rust prepare_image_for_drag...');
+
+    const [imagePath, iconPath] = await invoke<[string, string]>('prepare_image_for_drag', {
+      sourcePath: item.image_path,
+      readableFilename,
+    });
+
+    console.log('[DEBUG]   Rust returned:');
+    console.log('[DEBUG]     imagePath:', imagePath);
+    console.log('[DEBUG]     iconPath:', iconPath);
+    console.log('═══════════════════════════════════════════════════════════');
+
+    return { imagePath, iconPath };
+  } catch (err) {
+    console.error('[DEBUG]   ERROR from Rust:', err);
+    // Fallback: use same path for both
+    return { imagePath: item.image_path, iconPath: item.image_path };
+  }
+};
+
+// Get file paths for native drag (files and audio - NOT images)
+const getFilePaths = (): string[] => {
+  const item = props.item;
+
+  // For files, parse the JSON array from content_text
+  if (item.content_type === 'files' && item.content_text) {
+    try {
+      const files = JSON.parse(item.content_text) as string[];
+      return files.filter((f) => f && typeof f === 'string');
+    } catch {
+      return [];
+    }
+  }
+
+  // For audio files
+  if (item.content_type === 'audio' && item.content_text) {
+    try {
+      const files = JSON.parse(item.content_text) as string[];
+      return files.filter((f) => f && typeof f === 'string');
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+};
+
+// Get file paths for drag, with async handling for images
+// Returns { items, icon } - items is array of file paths, icon is the preview image
+const getFilePathsForDrag = async (): Promise<{ items: string[]; icon: string }> => {
+  const item = props.item;
+
+  console.log('───────────────────────────────────────────────────────────');
+  console.log('[DEBUG getFilePathsForDrag] CALLED');
+  console.log('[DEBUG]   content_type:', item.content_type);
+
+  // For images, prepare with readable filename and separate icon
+  if (item.content_type === 'image' && item.image_path) {
+    console.log('[DEBUG]   Type=image, calling prepareImageForDrag...');
+    const prepared = await prepareImageForDrag(item);
+    if (prepared) {
+      console.log('[DEBUG]   Returning for image drag:');
+      console.log('[DEBUG]     items:', [prepared.imagePath]);
+      console.log('[DEBUG]     icon:', prepared.iconPath);
+      return { items: [prepared.imagePath], icon: prepared.iconPath };
+    }
+    console.log('[DEBUG]   prepareImageForDrag returned null!');
+    return { items: [], icon: '' };
+  }
+
+  // For other types, use sync method (icon = first file)
+  const paths = getFilePaths();
+  console.log('[DEBUG]   Type=files/audio, using getFilePaths:');
+  console.log('[DEBUG]     paths:', paths);
+  console.log('[DEBUG]     icon will be:', paths[0] || '(empty)');
+  return { items: paths, icon: paths[0] || '' };
+};
+
+// Check if item can be dragged as native files
+const canDragAsFiles = computed(() => {
+  const item = props.item;
+  // Images can always be dragged (will be prepared async)
+  if (item.content_type === 'image' && item.image_path) {
+    return true;
+  }
+  // For other types, check sync paths
+  const paths = getFilePaths();
+  return paths.length > 0;
+});
+
+// Native drag state
+let dragStartPos: { x: number; y: number } | null = null;
+let dragStarted = false;
+const DRAG_THRESHOLD = 5; // pixels before drag starts
+
+// Handle native file drag (for files, images, audio)
+const handleNativeDragStart = (e: MouseEvent) => {
+  if (!canDragAsFiles.value) return;
+  if (e.button !== 0) return;
+
+  // Record start position for drag detection
+  dragStartPos = { x: e.clientX, y: e.clientY };
+  dragStarted = false;
+
+  // Add listeners for drag detection
+  document.addEventListener('mousemove', handleNativeDragMove);
+  document.addEventListener('mouseup', handleNativeDragEnd);
+};
+
+const handleNativeDragMove = async (e: MouseEvent) => {
+  if (!dragStartPos || dragStarted) return;
+
+  const dx = Math.abs(e.clientX - dragStartPos.x);
+  const dy = Math.abs(e.clientY - dragStartPos.y);
+
+  // Only start drag if moved beyond threshold
+  if (dx > DRAG_THRESHOLD || dy > DRAG_THRESHOLD) {
+    dragStarted = true;
+
+    console.log('▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶');
+    console.log('[DEBUG handleNativeDragMove] DRAG THRESHOLD EXCEEDED');
+
+    // Use async method to get paths (handles image renaming)
+    const { items, icon } = await getFilePathsForDrag();
+
+    console.log('[DEBUG]   getFilePathsForDrag returned:');
+    console.log('[DEBUG]     items:', items);
+    console.log('[DEBUG]     icon:', icon);
+
+    if (items.length === 0) {
+      console.log('[DEBUG]   No items to drag, aborting');
+      return;
+    }
+
+    isDragging.value = true;
+    pinboardStore.setDragging(true, props.item.id);
+
+    try {
+      console.log('[DEBUG]   CALLING startDrag() with:');
+      console.log('[DEBUG]     item:', items);
+      console.log('[DEBUG]     icon:', icon);
+      console.log('▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶');
+
+      await startDrag({
+        item: items,
+        icon: icon,
+      });
+
+      console.log('[DEBUG]   startDrag() completed successfully');
+    } catch (err) {
+      console.debug('[DEBUG]   startDrag() error:', err);
+    } finally {
+      isDragging.value = false;
+      pinboardStore.setDragging(false, null);
+      cleanup();
+    }
+  }
+};
+
+const handleNativeDragEnd = () => {
+  cleanup();
+};
+
+const cleanup = () => {
+  dragStartPos = null;
+  dragStarted = false;
+  document.removeEventListener('mousemove', handleNativeDragMove);
+  document.removeEventListener('mouseup', handleNativeDragEnd);
+};
+
+// Native HTML5 drag handlers (for text, links - internal drag)
 const handleDragStart = (e: DragEvent) => {
+  // Skip HTML5 drag for file types - they use native drag
+  if (canDragAsFiles.value) {
+    e.preventDefault();
+    return;
+  }
+
   if (!e.dataTransfer || !cardRef.value) return;
 
   isDragging.value = true;
   pinboardStore.setDragging(true, props.item.id);
 
   // Set drag data with multiple formats for compatibility
-  e.dataTransfer.setData('text/plain', props.item.id);
+  e.dataTransfer.setData('text/plain', props.item.content_text || '');
   e.dataTransfer.setData('application/x-clipboard-item', props.item.id);
   e.dataTransfer.effectAllowed = 'move';
 
@@ -260,9 +483,10 @@ const handleDragEnd = () => {
       selected: selected,
       dragging: isDragging,
     }"
-    draggable="true"
+    :draggable="!canDragAsFiles"
     @click="handleClick"
     @dblclick="handleDoubleClick"
+    @mousedown="handleNativeDragStart"
     @dragstart="handleDragStart"
     @dragend="handleDragEnd"
   >
@@ -328,9 +552,10 @@ const handleDragEnd = () => {
       selected: selected,
       dragging: isDragging,
     }"
-    draggable="true"
+    :draggable="!canDragAsFiles"
     @click="handleClick"
     @dblclick="handleDoubleClick"
+    @mousedown="handleNativeDragStart"
     @dragstart="handleDragStart"
     @dragend="handleDragEnd"
   >
@@ -473,8 +698,8 @@ const handleDragEnd = () => {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
-  /* Prevent children from being individually dragged */
-  -webkit-user-drag: none;
+  /* Note: Images use draggable="false" attribute for cross-platform support */
+  /* -webkit-user-drag is WebKit-only and doesn't work on Windows/Chromium */
 }
 
 .clipboard-card:active {

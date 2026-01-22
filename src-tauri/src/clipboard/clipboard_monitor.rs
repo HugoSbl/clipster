@@ -16,7 +16,7 @@ use tauri::{AppHandle, Emitter};
 /// Global monitor instance
 static MONITOR_HANDLE: OnceLock<Mutex<Option<JoinHandle<()>>>> = OnceLock::new();
 static SHOULD_STOP: AtomicBool = AtomicBool::new(false);
-static LAST_CONTENT_HASH: AtomicU64 = AtomicU64::new(0);
+static LAST_IMAGE_HASH: AtomicU64 = AtomicU64::new(0);
 
 /// Event payload for clipboard changes
 #[derive(Clone, serde::Serialize)]
@@ -41,20 +41,6 @@ impl ClipboardMonitorHandler {
         }
     }
 
-    /// Calculate hash of content for deduplication
-    fn hash_content(content: &str) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        content.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    /// Calculate hash of bytes for image deduplication
-    fn hash_bytes(data: &[u8]) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        data.hash(&mut hasher);
-        hasher.finish()
-    }
-
     /// Process new clipboard content
     fn process_clipboard_change(&self) {
         let content = clipboard_reader::read_clipboard();
@@ -73,13 +59,7 @@ impl ClipboardMonitorHandler {
             return;
         }
 
-        let content_hash = Self::hash_content(&text);
-        let last_hash = LAST_CONTENT_HASH.load(Ordering::SeqCst);
-        if content_hash == last_hash {
-            return;
-        }
-        LAST_CONTENT_HASH.store(content_hash, Ordering::SeqCst);
-
+        // Skip if exact same text already exists in database
         if let Ok(true) = self.db.content_exists(&text) {
             return;
         }
@@ -89,77 +69,129 @@ impl ClipboardMonitorHandler {
         self.save_and_emit(item);
     }
 
+    /// Calculate hash of bytes for deduplication
+    fn hash_bytes(data: &[u8]) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        data.hash(&mut hasher);
+        hasher.finish()
+    }
+
     /// Process image clipboard content
     fn process_image(&self, image_data: clipboard_reader::ImageData) {
-        let content_hash = Self::hash_bytes(&image_data.png_data);
-        let last_hash = LAST_CONTENT_HASH.load(Ordering::SeqCst);
-        if content_hash == last_hash {
+        eprintln!("╔═══════════════════════════════════════════════════════════");
+        eprintln!("║ [DEBUG process_image] NEW IMAGE FROM CLIPBOARD");
+        eprintln!("║   png_data size: {} bytes", image_data.png_data.len());
+
+        // Deduplicate images using hash of first 10KB
+        let hash_len = std::cmp::min(10240, image_data.png_data.len());
+        let image_hash = Self::hash_bytes(&image_data.png_data[..hash_len]);
+
+        eprintln!("║   hash (first {}B): {}", hash_len, image_hash);
+
+        if image_hash == LAST_IMAGE_HASH.load(Ordering::SeqCst) {
+            eprintln!("║   DUPLICATE - skipping");
+            eprintln!("╚═══════════════════════════════════════════════════════════");
             return;
         }
-        LAST_CONTENT_HASH.store(content_hash, Ordering::SeqCst);
+        LAST_IMAGE_HASH.store(image_hash, Ordering::SeqCst);
 
         let id = uuid::Uuid::new_v4().to_string();
+        eprintln!("║   Generated UUID: {}", id);
 
         // Load image from PNG data
         match image::load_from_memory(&image_data.png_data) {
             Ok(image) => {
-                // Generate thumbnail
+                eprintln!("║   Image decoded: {}x{}", image.width(), image.height());
+
+                // Generate thumbnail (continue even if this fails)
                 let thumbnail_base64 = match file_storage::generate_thumbnail_default(&image) {
-                    Ok(png_bytes) => file_storage::thumbnail_to_base64(&png_bytes),
+                    Ok(png_bytes) => {
+                        eprintln!("║   Thumbnail generated: {} bytes", png_bytes.len());
+                        Some(file_storage::thumbnail_to_base64(&png_bytes))
+                    }
                     Err(e) => {
-                        eprintln!("Failed to generate thumbnail: {}", e);
-                        return;
+                        eprintln!("║   Thumbnail FAILED: {} (continuing)", e);
+                        None
                     }
                 };
 
                 // Save full image to disk
                 let image_path = match self.file_storage.save_image(&id, &image) {
-                    Ok(path) => path.to_string_lossy().to_string(),
+                    Ok(path) => {
+                        let path_str = path.to_string_lossy().to_string();
+                        // Verify the saved file
+                        if let Ok(meta) = std::fs::metadata(&path) {
+                            eprintln!("║   Image SAVED: {}", path_str);
+                            eprintln!("║   Saved file size: {} bytes", meta.len());
+                        }
+                        path_str
+                    }
                     Err(e) => {
-                        eprintln!("Failed to save image: {}", e);
+                        eprintln!("║   Image save FAILED: {}", e);
+                        eprintln!("╚═══════════════════════════════════════════════════════════");
                         return;
                     }
                 };
 
                 let (source_app, source_app_icon) = self.get_source_app_info();
+                eprintln!("║   source_app: {:?}", source_app);
+                eprintln!("╚═══════════════════════════════════════════════════════════");
+
                 let item =
                     ClipboardItem::new_image(thumbnail_base64, image_path, source_app, source_app_icon);
                 self.save_and_emit(item);
             }
             Err(e) => {
-                eprintln!("Failed to decode image: {}", e);
+                eprintln!("║   Image decode FAILED: {}", e);
+                eprintln!("╚═══════════════════════════════════════════════════════════");
             }
         }
     }
 
     /// Process file list clipboard content
     fn process_files(&self, files: Vec<String>) {
+        eprintln!("╔═══════════════════════════════════════════════════════════");
+        eprintln!("║ [DEBUG process_files] Processing {} files", files.len());
+        eprintln!("║   files: {:?}", files);
+
         if files.is_empty() {
+            eprintln!("║   EMPTY - skipping");
+            eprintln!("╚═══════════════════════════════════════════════════════════");
             return;
         }
 
-        let paths_str = files.join("|");
-        let content_hash = Self::hash_content(&paths_str);
-        let last_hash = LAST_CONTENT_HASH.load(Ordering::SeqCst);
-        if content_hash == last_hash {
+        // Deduplicate files using content_exists (same pattern as text)
+        let files_json = serde_json::to_string(&files).unwrap_or_default();
+        eprintln!("║   files_json: {}", files_json);
+
+        if let Ok(true) = self.db.content_exists(&files_json) {
+            eprintln!("║   DUPLICATE - already exists in DB, skipping");
+            eprintln!("╚═══════════════════════════════════════════════════════════");
             return;
         }
-        LAST_CONTENT_HASH.store(content_hash, Ordering::SeqCst);
+        eprintln!("║   Not a duplicate, proceeding...");
 
         // Generate thumbnail for the first file (if possible)
+        eprintln!("║   Generating thumbnail...");
         let thumbnail_base64 = self.generate_file_thumbnail(&files);
+        eprintln!("║   Thumbnail: {:?}", thumbnail_base64.as_ref().map(|s| format!("{}... ({} chars)", &s[..20.min(s.len())], s.len())));
 
         // For files, use the file's own icon instead of source app
         // This is more informative (shows PDF icon, Word icon, etc.)
         let first_file = &files[0];
+        eprintln!("║   Getting file app info for: {}", first_file);
         let (source_app, source_app_icon) = self.get_file_app_info(first_file);
+        eprintln!("║   source_app: {:?}", source_app);
 
+        eprintln!("║   Creating ClipboardItem...");
         let item = ClipboardItem::new_files_with_thumbnail(
             files,
             source_app,
             source_app_icon,
             thumbnail_base64,
         );
+        eprintln!("║   Calling save_and_emit...");
+        eprintln!("╚═══════════════════════════════════════════════════════════");
         self.save_and_emit(item);
     }
 
@@ -273,8 +305,10 @@ impl ClipboardMonitorHandler {
 
     /// Save item to database and emit event to frontend
     fn save_and_emit(&self, item: ClipboardItem) {
+        println!("[ClipboardMonitor] Saving item: {} (type: {:?})", item.id, item.content_type);
+
         if let Err(e) = self.db.insert_item(&item) {
-            eprintln!("Failed to save clipboard item: {}", e);
+            eprintln!("[ClipboardMonitor] Failed to save clipboard item: {}", e);
             return;
         }
 
@@ -282,9 +316,12 @@ impl ClipboardMonitorHandler {
             let _ = self.db.prune_oldest(limit);
         }
 
+        println!("[ClipboardMonitor] Emitting clipboard-changed event for item: {}", item.id);
         let payload = ClipboardChangedPayload { item };
         if let Err(e) = self.app_handle.emit("clipboard-changed", &payload) {
-            eprintln!("Failed to emit clipboard-changed event: {}", e);
+            eprintln!("[ClipboardMonitor] Failed to emit clipboard-changed event: {}", e);
+        } else {
+            println!("[ClipboardMonitor] Event emitted successfully");
         }
     }
 
@@ -703,71 +740,20 @@ mod platform {
     ) -> Result<JoinHandle<()>, String> {
         let handle = thread::spawn(move || {
             let handler = ClipboardMonitorHandler::new(app_handle, db);
-            let mut last_text_hash: u64 = 0;
-            let mut last_image_hash: u64 = 0;
-            let mut last_files_hash: u64 = 0;
 
-            // Get initial clipboard state to avoid capturing existing content
-            if let Some(files) = clipboard_reader::read_files() {
-                let files_str = files.join("|");
-                last_files_hash = ClipboardMonitorHandler::hash_content(&files_str);
-            }
-            if let Some(text) = clipboard_reader::read_text() {
-                last_text_hash = ClipboardMonitorHandler::hash_content(&text);
-            }
-            if let Some(img) = clipboard_reader::read_image() {
-                last_image_hash = ClipboardMonitorHandler::hash_bytes(&img.png_data);
-            }
+            // Use pasteboard changeCount for reliable change detection
+            // This increments every time the clipboard changes, even for same content
+            let mut last_change_count = clipboard_reader::get_change_count();
 
-            // Poll for clipboard changes
-            // Priority: Files > Image > Text (same as read_clipboard)
-            // Use 250ms polling to capture source app before user switches apps
+            // Poll for clipboard changes using changeCount
+            // 100ms polling for responsive UX
             while !SHOULD_STOP.load(Ordering::SeqCst) {
-                thread::sleep(Duration::from_millis(250));
+                thread::sleep(Duration::from_millis(100));
 
-                // Check for new files FIRST (before image, because copying a file
-                // also creates a preview image on the pasteboard)
-                if let Some(files) = clipboard_reader::read_files() {
-                    let files_str = files.join("|");
-                    let hash = ClipboardMonitorHandler::hash_content(&files_str);
-                    if hash != last_files_hash {
-                        last_files_hash = hash;
-                        last_text_hash = 0;
-                        last_image_hash = 0;
-                        handler.process_clipboard_change();
-                        continue;
-                    }
-                } else {
-                    // No files on pasteboard, reset files hash
-                    if last_files_hash != 0 {
-                        last_files_hash = 0;
-                    }
-
-                    // Check for new image (only if no files detected)
-                    if let Some(img) = clipboard_reader::read_image() {
-                        let hash = ClipboardMonitorHandler::hash_bytes(&img.png_data);
-                        if hash != last_image_hash {
-                            last_image_hash = hash;
-                            last_text_hash = 0;
-                            handler.process_clipboard_change();
-                            continue;
-                        }
-                    } else {
-                        // No image, reset image hash
-                        if last_image_hash != 0 {
-                            last_image_hash = 0;
-                        }
-
-                        // Check for new text (only if no files or image)
-                        if let Some(text) = clipboard_reader::read_text() {
-                            let hash = ClipboardMonitorHandler::hash_content(&text);
-                            if hash != last_text_hash {
-                                last_text_hash = hash;
-                                handler.process_clipboard_change();
-                                continue;
-                            }
-                        }
-                    }
+                let current_change_count = clipboard_reader::get_change_count();
+                if current_change_count != last_change_count {
+                    last_change_count = current_change_count;
+                    handler.process_clipboard_change();
                 }
             }
         });
@@ -825,13 +811,20 @@ pub fn is_monitoring() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    fn hash_content(content: &str) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        content.hash(&mut hasher);
+        hasher.finish()
+    }
 
     #[test]
     fn test_hash_content() {
-        let hash1 = ClipboardMonitorHandler::hash_content("Hello");
-        let hash2 = ClipboardMonitorHandler::hash_content("Hello");
-        let hash3 = ClipboardMonitorHandler::hash_content("World");
+        let hash1 = hash_content("Hello");
+        let hash2 = hash_content("Hello");
+        let hash3 = hash_content("World");
 
         assert_eq!(hash1, hash2);
         assert_ne!(hash1, hash3);

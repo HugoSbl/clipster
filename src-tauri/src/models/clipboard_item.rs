@@ -175,7 +175,7 @@ impl ClipboardItem {
 
     /// Create a new image clipboard item
     pub fn new_image(
-        thumbnail_base64: String,
+        thumbnail_base64: Option<String>,
         image_path: String,
         source_app: Option<String>,
         source_app_icon: Option<String>,
@@ -184,7 +184,7 @@ impl ClipboardItem {
             id: uuid::Uuid::new_v4().to_string(),
             content_type: ContentType::Image,
             content_text: None,
-            thumbnail_base64: Some(thumbnail_base64),
+            thumbnail_base64,
             image_path: Some(image_path),
             source_app,
             source_app_icon,

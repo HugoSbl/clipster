@@ -222,6 +222,15 @@ mod platform {
     use objc2_app_kit::NSPasteboard;
     use objc2_foundation::{NSString, NSURL};
 
+    /// Get the pasteboard change count (increments on every clipboard change)
+    /// This is the most reliable way to detect clipboard changes on macOS
+    pub fn get_change_count() -> isize {
+        unsafe {
+            let pasteboard = NSPasteboard::generalPasteboard();
+            pasteboard.changeCount()
+        }
+    }
+
     /// Check if files are available on the pasteboard
     fn has_files_on_pasteboard() -> bool {
         unsafe {
@@ -276,8 +285,19 @@ mod platform {
 
     /// Read image data from clipboard
     pub fn read_image() -> Option<ImageData> {
+        eprintln!("[DEBUG read_image] Attempting to read image from clipboard...");
+
         let mut clipboard = Clipboard::new().ok()?;
-        let img_data = clipboard.get_image().ok()?;
+        let img_data = match clipboard.get_image() {
+            Ok(data) => {
+                eprintln!("[DEBUG read_image]   Got image: {}x{}, {} bytes RGBA", data.width, data.height, data.bytes.len());
+                data
+            }
+            Err(e) => {
+                eprintln!("[DEBUG read_image]   No image in clipboard: {:?}", e);
+                return None;
+            }
+        };
 
         // Convert RGBA to PNG
         let width = img_data.width as u32;
@@ -292,6 +312,8 @@ mod platform {
         dynamic_img
             .write_to(&mut std::io::Cursor::new(&mut png_data), image::ImageFormat::Png)
             .ok()?;
+
+        eprintln!("[DEBUG read_image]   Encoded to PNG: {} bytes", png_data.len());
 
         Some(ImageData {
             png_data,
@@ -335,71 +357,59 @@ mod platform {
         }
     }
 
-    /// Check if all files in the list are image files
-    fn are_all_image_files(files: &[String]) -> bool {
-        let image_extensions = ["png", "jpg", "jpeg", "gif", "bmp", "webp", "tiff", "tif", "heic", "heif"];
-        files.iter().all(|path| {
-            let lower = path.to_lowercase();
-            image_extensions.iter().any(|ext| lower.ends_with(&format!(".{}", ext)))
-        })
-    }
-
-    /// Read image data directly from a file path
-    fn read_image_from_file(path: &str) -> Option<ImageData> {
-        use std::path::Path;
-
-        let img = image::open(Path::new(path)).ok()?;
-        let width = img.width();
-        let height = img.height();
-
-        // Encode as PNG
-        let mut png_data = Vec::new();
-        img.write_to(
-            &mut std::io::Cursor::new(&mut png_data),
-            image::ImageFormat::Png,
-        ).ok()?;
-
-        Some(ImageData {
-            png_data,
-            width,
-            height,
-        })
-    }
-
     /// Read clipboard content based on detected format
-    /// Smart detection: If files are images (like screenshots), read them as Image type.
+    /// Priority order depends on content:
+    /// - If files exist on disk → treat as FILES (preserves original filename)
+    /// - Otherwise → Image -> Text
     pub fn read_clipboard() -> ClipboardContent {
-        // Check what's available
-        let files = read_files();
+        eprintln!("┌─────────────────────────────────────────────────────────────");
+        eprintln!("│ [DEBUG read_clipboard] Checking clipboard content...");
 
-        // If we have files, decide whether to treat them as files or as image
-        if let Some(ref file_list) = files {
-            // If ALL files are image files, treat as Image (not Files)
-            // This handles screenshots and copied image files correctly
-            if are_all_image_files(file_list) && file_list.len() == 1 {
-                // Try to read from clipboard first (better quality for screenshots)
-                if let Some(img) = read_image() {
-                    return ClipboardContent::Image(img);
-                }
-                // Fallback: read directly from the image file
-                if let Some(img) = read_image_from_file(&file_list[0]) {
-                    return ClipboardContent::Image(img);
-                }
+        // Check what's available
+        let has_files = read_files();
+        let has_image = read_image();
+
+        eprintln!("│   has_files: {:?}", has_files.as_ref().map(|f| f.clone()));
+        eprintln!("│   has_image: {}", has_image.is_some());
+
+        // If we have FILES that exist on disk, prioritize them (preserves original filename)
+        // This handles the case of copying a file from Finder
+        if let Some(ref file_list) = has_files {
+            // Check if files actually exist on disk
+            let files_exist = file_list.iter().all(|f| std::path::Path::new(f).exists());
+            eprintln!("│   files_exist on disk: {}", files_exist);
+
+            if files_exist && !file_list.is_empty() {
+                eprintln!("│ → Using FILES (original paths preserved): {:?}", file_list);
+                eprintln!("└─────────────────────────────────────────────────────────────");
+                return ClipboardContent::Files(file_list.clone());
             }
-            // Non-image files or multiple files: treat as Files
-            return ClipboardContent::Files(file_list.clone());
         }
 
-        // No files, try image from clipboard
-        if let Some(img) = read_image() {
+        // Otherwise, check for image data (screenshots, copied images from apps)
+        if let Some(img) = has_image {
+            eprintln!("│ → Found IMAGE: {}x{}, {} bytes PNG", img.width, img.height, img.png_data.len());
+            eprintln!("└─────────────────────────────────────────────────────────────");
             return ClipboardContent::Image(img);
         }
 
-        // Try text
+        // Fallback to files even if they don't exist (edge case)
+        if let Some(file_list) = has_files {
+            eprintln!("│ → Found FILES (fallback): {:?}", file_list);
+            eprintln!("└─────────────────────────────────────────────────────────────");
+            return ClipboardContent::Files(file_list);
+        }
+
+        // Check text last
         if let Some(text) = read_text() {
+            let preview = if text.len() > 50 { &text[..50] } else { &text };
+            eprintln!("│ → Found TEXT: {}... ({} chars)", preview, text.len());
+            eprintln!("└─────────────────────────────────────────────────────────────");
             return ClipboardContent::Text(text);
         }
 
+        eprintln!("│ → EMPTY clipboard");
+        eprintln!("└─────────────────────────────────────────────────────────────");
         ClipboardContent::Empty
     }
 

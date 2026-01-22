@@ -1,80 +1,74 @@
-# Clipster Windows
+# Clipster
 
-Clipboard manager for Windows built with Tauri 2 + Vue 3 + TypeScript.
+Cross-platform clipboard manager built with Tauri 2 + Vue 3 + TypeScript.
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|------------|
-| Frontend | Vue 3 (Composition API), Pinia, Tailwind CSS, Radix Vue |
-| Backend | Tauri 2, Rust, Windows API |
-| Build | Vite, vue-tsc |
+- **Frontend**: Vue 3 (Composition API), Pinia, Tailwind CSS, Radix Vue
+- **Backend**: Tauri 2, Rust, SQLite (rusqlite)
+- **Clipboard**: arboard (cross-platform), platform-specific APIs for advanced features
+- **Build**: Vite, vue-tsc
 
-## Project Structure
+## Structure
 
-```
-src/                    # Vue frontend
-├── assets/             # CSS (tailwind.css), SVG
-├── components/         # Vue components
-│   └── display-paste/  # Clipboard display components
-├── App.vue             # Root component
-└── main.ts             # Vue entry point
-
-src-tauri/              # Rust backend
-├── src/
-│   ├── main.rs         # Tauri entry point
-│   ├── lib.rs          # Library exports
-│   ├── commands/       # Tauri commands (IPC)
-│   │   └── clipboard_commands.rs
-│   └── windows_api/    # Windows API wrappers
-│       └── windows_api.rs
-└── Cargo.toml
-```
+- `src/` - Vue frontend
+  - `components/` - Vue components (ClipboardCard, Timeline, PinboardTabs, etc.)
+  - `stores/` - Pinia stores (clipboard.ts, pinboards.ts, settings.ts)
+  - `composables/` - Vue composables (useKeyboard)
+  - `types/` - TypeScript types matching Rust structs
+  - `App.vue` - Root component with event listeners
+- `src-tauri/src/` - Rust backend
+  - `clipboard/` - Clipboard monitoring and reading (platform-specific)
+  - `commands/` - Tauri IPC commands (clipboard, pinboard, settings, window)
+  - `models/` - Data models (ClipboardItem, Pinboard)
+  - `storage/` - SQLite database and file storage for images
+  - `main.rs` - App setup, tray, shortcuts, window config
 
 ## Commands
 
 ```bash
-# Development
-npm run tauri dev
-
-# Build
-npm run build              # Frontend only
-npm run tauri build        # Full app bundle
-
-# Type check
-vue-tsc --noEmit
+npm run tauri dev     # Development with hot-reload
+npm run build         # Build frontend (vue-tsc + vite)
+npm run tauri build   # Full app bundle
+npx vue-tsc --noEmit  # Type check frontend
+cargo check           # Check Rust compilation
 ```
 
-## Tauri Commands (IPC)
+## Tauri IPC Commands
 
-| Command | Description | File |
-|---------|-------------|------|
-| `get_clipboard` | Get clipboard text content | `clipboard_commands.rs:5` |
+Invoke from frontend with `invoke<ReturnType>('command_name', { args })`:
 
-Frontend usage:
+- **Clipboard**: get_clipboard, get_clipboard_history, copy_to_clipboard, delete_clipboard_item
+- **Pinboards**: get_pinboards, create_pinboard, add_item_to_pinboard, remove_item_from_pinboard
+- **Settings**: get_settings, update_setting, get_history_limit
+
+## Event System
+
+Backend emits `clipboard-changed` event when new clipboard content detected:
 ```typescript
-import { invoke } from "@tauri-apps/api/core";
-const text = await invoke("get_clipboard");
+listen<ClipboardChangedPayload>('clipboard-changed', (event) => {
+  // event.payload.item: ClipboardItem
+});
 ```
 
-## Windows API
+## Data Storage
 
-Clipboard access uses Windows crate with `CF_UNICODETEXT` format.
+- **Database**: `~/Library/Application Support/.clipster/clipster.db` (macOS)
+- **Images**: `~/Library/Application Support/.clipster/images/`
+- Content types: text, image, files, link, audio
 
-Key functions in `windows_api.rs`:
-- `get_clipboard_datas()` - Read clipboard text (UTF-16 conversion)
-- `list_clipboard_elements()` - Debug: list all clipboard formats
+## Key Patterns
 
-## Conventions
+- **Vue**: `<script setup>` with Composition API, NO Options API
+- **State**: Pinia stores with typed actions and getters
+- **Drag & Drop**: HTML5 for internal drag, `tauri-plugin-drag` for native file drag to external apps
+- **Platform code**: Use `#[cfg(target_os = "...")]` for platform-specific Rust
 
-- Vue: `<script setup>` with Composition API
-- State: Pinia stores (not yet implemented)
-- Styling: Tailwind CSS utilities
-- Rust: Module pattern with `mod.rs` exports
-- Comments: French (legacy), prefer English for new code
+## ⚠️ Gotchas
 
-## Window Config
-
-- Size: 800x600, non-resizable
-- Always on top, transparent background
-- No decorations styling (custom titlebar possible)
+- ALWAYS run `npx vue-tsc --noEmit` before committing TypeScript changes
+- NEVER use `any` type - use proper types or `unknown` with type guards
+- Clipboard monitoring uses polling on macOS (250ms), events on Windows
+- Images use draggable="false" attribute (NOT -webkit-user-drag CSS which is WebKit-only)
+- Types in `src/types/` MUST match Rust structs in `src-tauri/src/models/`
+- Global shortcut: Ctrl+Shift+V toggles window visibility

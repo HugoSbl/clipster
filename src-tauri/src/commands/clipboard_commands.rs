@@ -3,6 +3,7 @@ use crate::models::ClipboardItem;
 use crate::AppState;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use std::fs;
+use std::path::Path;
 use tauri::State;
 
 /// Get current clipboard text (legacy command)
@@ -142,4 +143,89 @@ pub fn get_image_data(
 
     // Encode as base64
     Ok(BASE64.encode(&image_bytes))
+}
+
+/// Prepare an image file for drag by copying it to temp with a readable filename
+/// Returns (image_path, icon_path) - both paths for the drag operation
+#[tauri::command]
+pub fn prepare_image_for_drag(
+    source_path: String,
+    readable_filename: String,
+) -> Result<(String, String), String> {
+    eprintln!("═══════════════════════════════════════════════════════════");
+    eprintln!("[DEBUG prepare_image_for_drag] CALLED");
+    eprintln!("[DEBUG]   source_path: {}", source_path);
+    eprintln!("[DEBUG]   readable_filename: {}", readable_filename);
+
+    // Verify source file exists
+    let source = Path::new(&source_path);
+    if !source.exists() {
+        eprintln!("[DEBUG]   ERROR: Source file not found!");
+        return Err(format!("Source file not found: {}", source_path));
+    }
+
+    // Get source file size
+    let source_size = fs::metadata(source).map(|m| m.len()).unwrap_or(0);
+    eprintln!("[DEBUG]   source file exists, size: {} bytes", source_size);
+
+    // Get system temp directory
+    let temp_dir = std::env::temp_dir();
+    let temp_path = temp_dir.join(&readable_filename);
+    eprintln!("[DEBUG]   temp_path: {:?}", temp_path);
+
+    // Copy file to temp location with readable name
+    eprintln!("[DEBUG]   Copying file...");
+    let bytes_copied = fs::copy(source, &temp_path)
+        .map_err(|e| format!("Failed to copy file to temp: {}", e))?;
+    eprintln!("[DEBUG]   Copied {} bytes to temp", bytes_copied);
+
+    // Verify the copy
+    let temp_size = fs::metadata(&temp_path).map(|m| m.len()).unwrap_or(0);
+    eprintln!("[DEBUG]   Verification - temp file size: {} bytes", temp_size);
+
+    if temp_size != source_size {
+        eprintln!("[DEBUG]   WARNING: Size mismatch! source={} temp={}", source_size, temp_size);
+    }
+
+    // On macOS, remove quarantine attribute so Quick Look and Finder work correctly
+    #[cfg(target_os = "macos")]
+    {
+        eprintln!("[DEBUG]   Removing quarantine xattr...");
+        let _ = std::process::Command::new("xattr")
+            .args(["-d", "com.apple.quarantine", temp_path.to_str().unwrap_or("")])
+            .output();
+    }
+
+    let temp_path_str = temp_path
+        .to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Failed to convert path to string".to_string())?;
+
+    // Create a small thumbnail for drag icon (separate from actual file)
+    let icon_filename = format!("icon_{}", readable_filename);
+    let icon_path = temp_dir.join(&icon_filename);
+    eprintln!("[DEBUG]   Creating drag icon at: {:?}", icon_path);
+
+    // Create 64x64 thumbnail for drag preview
+    if let Ok(img) = image::open(source) {
+        let thumbnail = img.thumbnail(64, 64);
+        let _ = thumbnail.save_with_format(&icon_path, image::ImageFormat::Png);
+        eprintln!("[DEBUG]   Created 64x64 thumbnail icon");
+    } else {
+        // If thumbnail fails, copy the original (fallback)
+        let _ = fs::copy(source, &icon_path);
+        eprintln!("[DEBUG]   Thumbnail failed, copied original as icon");
+    }
+
+    let icon_path_str = icon_path
+        .to_str()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| temp_path_str.clone());
+
+    eprintln!("[DEBUG]   RETURNING:");
+    eprintln!("[DEBUG]     image_path (item): {}", temp_path_str);
+    eprintln!("[DEBUG]     icon_path: {}", icon_path_str);
+    eprintln!("═══════════════════════════════════════════════════════════");
+
+    Ok((temp_path_str, icon_path_str))
 }
