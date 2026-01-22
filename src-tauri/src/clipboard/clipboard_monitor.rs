@@ -22,6 +22,9 @@ static LAST_IMAGE_HASH: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone, serde::Serialize)]
 pub struct ClipboardChangedPayload {
     pub item: ClipboardItem,
+    /// If this item replaced an existing one (move to top), this contains the old item's ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replaced_item_id: Option<String>,
 }
 
 /// Clipboard handler that processes clipboard changes
@@ -54,19 +57,44 @@ impl ClipboardMonitorHandler {
     }
 
     /// Process text clipboard content
+    /// Uses "move to top" behavior: if content exists, delete old and create new
+    /// Pinned items are preserved - only unpinned history items are affected
     fn process_text(&self, text: String) {
+        eprintln!("╔═══════════════════════════════════════════════════════════");
+        eprintln!("║ [DEBUG process_text] NEW TEXT FROM CLIPBOARD");
+        let preview = if text.len() > 100 { format!("{}...", &text[..100]) } else { text.clone() };
+        eprintln!("║   text: {} ({} chars)", preview.replace('\n', "\\n"), text.len());
+
         if text.trim().is_empty() {
+            eprintln!("║   EMPTY/WHITESPACE - skipping");
+            eprintln!("╚═══════════════════════════════════════════════════════════");
             return;
         }
 
-        // Skip if exact same text already exists in database
-        if let Ok(true) = self.db.content_exists(&text) {
-            return;
-        }
+        // "Move to top" behavior: delete existing unpinned item, then create new
+        // This ensures the most recent copy is always at the top
+        // Pinned items are NOT affected - they stay in their pinboards
+        let replaced_item_id = match self.db.delete_unpinned_by_content(&text) {
+            Ok(Some(id)) => {
+                eprintln!("║   MOVE TO TOP: deleted existing item {}", id);
+                Some(id)
+            }
+            Ok(None) => {
+                eprintln!("║   New content (not in unpinned history)");
+                None
+            }
+            Err(e) => {
+                eprintln!("║   Warning: delete_unpinned_by_content failed: {}", e);
+                None
+            }
+        };
 
         let (source_app, source_app_icon) = self.get_source_app_info();
+        eprintln!("║   source_app: {:?}", source_app);
+        eprintln!("╚═══════════════════════════════════════════════════════════");
+
         let item = ClipboardItem::new_text(text, source_app, source_app_icon);
-        self.save_and_emit(item);
+        self.save_and_emit(item, replaced_item_id);
     }
 
     /// Calculate hash of bytes for deduplication
@@ -77,6 +105,8 @@ impl ClipboardMonitorHandler {
     }
 
     /// Process image clipboard content
+    /// CRITICAL: This function MUST NEVER silently drop an image.
+    /// Even if decoding fails, we save the raw PNG bytes.
     fn process_image(&self, image_data: clipboard_reader::ImageData) {
         eprintln!("╔═══════════════════════════════════════════════════════════");
         eprintln!("║ [DEBUG process_image] NEW IMAGE FROM CLIPBOARD");
@@ -98,7 +128,7 @@ impl ClipboardMonitorHandler {
         let id = uuid::Uuid::new_v4().to_string();
         eprintln!("║   Generated UUID: {}", id);
 
-        // Load image from PNG data
+        // Try to decode image - but DON'T fail if this doesn't work
         match image::load_from_memory(&image_data.png_data) {
             Ok(image) => {
                 eprintln!("║   Image decoded: {}x{}", image.width(), image.height());
@@ -110,7 +140,7 @@ impl ClipboardMonitorHandler {
                         Some(file_storage::thumbnail_to_base64(&png_bytes))
                     }
                     Err(e) => {
-                        eprintln!("║   Thumbnail FAILED: {} (continuing)", e);
+                        eprintln!("║   Thumbnail FAILED: {} (continuing with placeholder)", e);
                         None
                     }
                 };
@@ -127,8 +157,9 @@ impl ClipboardMonitorHandler {
                         path_str
                     }
                     Err(e) => {
-                        eprintln!("║   Image save FAILED: {}", e);
-                        eprintln!("╚═══════════════════════════════════════════════════════════");
+                        eprintln!("║   Image save via image crate FAILED: {}", e);
+                        // FALLBACK: Save raw PNG bytes directly
+                        self.save_raw_png_and_emit(&id, &image_data.png_data, None);
                         return;
                     }
                 };
@@ -139,20 +170,69 @@ impl ClipboardMonitorHandler {
 
                 let item =
                     ClipboardItem::new_image(thumbnail_base64, image_path, source_app, source_app_icon);
-                self.save_and_emit(item);
+                // Images use hash-based deduplication, not "move to top"
+                self.save_and_emit(item, None);
             }
             Err(e) => {
                 eprintln!("║   Image decode FAILED: {}", e);
-                eprintln!("╚═══════════════════════════════════════════════════════════");
+                eprintln!("║   FALLBACK: Saving raw PNG bytes directly...");
+                // CRITICAL FALLBACK: Even if we can't decode the image, save the raw bytes
+                // This ensures NO clipboard capture is ever lost
+                self.save_raw_png_and_emit(&id, &image_data.png_data, Some(e.to_string()));
             }
         }
     }
 
+    /// Fallback: Save raw PNG bytes when image decoding fails
+    /// This ensures we NEVER lose a clipboard capture
+    fn save_raw_png_and_emit(&self, id: &str, png_data: &[u8], decode_error: Option<String>) {
+        eprintln!("║   [FALLBACK] Saving raw PNG ({} bytes)...", png_data.len());
+
+        // Try to save raw PNG bytes to disk
+        let image_path = match self.file_storage.save_png_bytes(id, png_data) {
+            Ok(path) => {
+                let path_str = path.to_string_lossy().to_string();
+                eprintln!("║   [FALLBACK] Raw PNG saved: {}", path_str);
+                path_str
+            }
+            Err(e) => {
+                eprintln!("║   [FALLBACK] CRITICAL: Even raw save failed: {}", e);
+                eprintln!("║   ITEM LOST - this should never happen!");
+                eprintln!("╚═══════════════════════════════════════════════════════════");
+                return;
+            }
+        };
+
+        // Create thumbnail from raw data (might work even if full decode failed)
+        let thumbnail_base64 = image::load_from_memory(png_data)
+            .ok()
+            .and_then(|img| file_storage::generate_thumbnail_default(&img).ok())
+            .map(|bytes| file_storage::thumbnail_to_base64(&bytes));
+
+        let (source_app, source_app_icon) = self.get_source_app_info();
+
+        if let Some(err) = decode_error {
+            eprintln!("║   [FALLBACK] Original decode error: {}", err);
+        }
+        eprintln!("║   [FALLBACK] source_app: {:?}", source_app);
+        eprintln!("╚═══════════════════════════════════════════════════════════");
+
+        let item = ClipboardItem::new_image(thumbnail_base64, image_path, source_app, source_app_icon);
+        // Images use hash-based deduplication, not "move to top"
+        self.save_and_emit(item, None);
+    }
+
     /// Process file list clipboard content
+    /// CRITICAL: This function MUST NEVER silently drop files.
+    /// Even if thumbnail generation fails, we still save the item.
+    /// Uses "move to top" behavior for duplicates.
     fn process_files(&self, files: Vec<String>) {
         eprintln!("╔═══════════════════════════════════════════════════════════");
         eprintln!("║ [DEBUG process_files] Processing {} files", files.len());
-        eprintln!("║   files: {:?}", files);
+        for (i, f) in files.iter().enumerate() {
+            let exists = std::path::Path::new(f).exists();
+            eprintln!("║   [{}] {} (exists: {})", i, f, exists);
+        }
 
         if files.is_empty() {
             eprintln!("║   EMPTY - skipping");
@@ -160,39 +240,47 @@ impl ClipboardMonitorHandler {
             return;
         }
 
-        // Deduplicate files using content_exists (same pattern as text)
+        // "Move to top" behavior: delete existing unpinned item, then create new
         let files_json = serde_json::to_string(&files).unwrap_or_default();
-        eprintln!("║   files_json: {}", files_json);
 
-        if let Ok(true) = self.db.content_exists(&files_json) {
-            eprintln!("║   DUPLICATE - already exists in DB, skipping");
-            eprintln!("╚═══════════════════════════════════════════════════════════");
-            return;
-        }
-        eprintln!("║   Not a duplicate, proceeding...");
+        let replaced_item_id = match self.db.delete_unpinned_by_content(&files_json) {
+            Ok(Some(id)) => {
+                eprintln!("║   MOVE TO TOP: deleted existing item {}", id);
+                Some(id)
+            }
+            Ok(None) => {
+                eprintln!("║   New content (not in unpinned history)");
+                None
+            }
+            Err(e) => {
+                eprintln!("║   Warning: delete_unpinned_by_content failed: {}", e);
+                None
+            }
+        };
 
         // Generate thumbnail for the first file (if possible)
-        eprintln!("║   Generating thumbnail...");
+        // IMPORTANT: Thumbnail failure MUST NOT prevent item creation
+        eprintln!("║   Generating thumbnail (failure OK)...");
         let thumbnail_base64 = self.generate_file_thumbnail(&files);
-        eprintln!("║   Thumbnail: {:?}", thumbnail_base64.as_ref().map(|s| format!("{}... ({} chars)", &s[..20.min(s.len())], s.len())));
+        match &thumbnail_base64 {
+            Some(t) => eprintln!("║   Thumbnail: {} chars", t.len()),
+            None => eprintln!("║   Thumbnail: None (will use file icon)"),
+        }
 
         // For files, use the file's own icon instead of source app
         // This is more informative (shows PDF icon, Word icon, etc.)
         let first_file = &files[0];
-        eprintln!("║   Getting file app info for: {}", first_file);
         let (source_app, source_app_icon) = self.get_file_app_info(first_file);
         eprintln!("║   source_app: {:?}", source_app);
+        eprintln!("╚═══════════════════════════════════════════════════════════");
 
-        eprintln!("║   Creating ClipboardItem...");
         let item = ClipboardItem::new_files_with_thumbnail(
             files,
             source_app,
             source_app_icon,
             thumbnail_base64,
         );
-        eprintln!("║   Calling save_and_emit...");
-        eprintln!("╚═══════════════════════════════════════════════════════════");
-        self.save_and_emit(item);
+        self.save_and_emit(item, replaced_item_id);
     }
 
     /// Get file type icon and app name for a file path
@@ -295,34 +383,66 @@ impl ClipboardMonitorHandler {
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let _ = thumbnail_bytes?;
 
-        // Check thumbnail size (skip if too large, > 50KB)
-        if thumbnail_bytes.len() > 50 * 1024 {
+        // Check thumbnail size (skip if too large, > 300KB)
+        let size_kb = thumbnail_bytes.len() / 1024;
+        if thumbnail_bytes.len() > 300 * 1024 {
+            eprintln!("[generate_file_thumbnail] Thumbnail too large: {}KB > 300KB, skipping", size_kb);
             return None;
         }
+        eprintln!("[generate_file_thumbnail] Thumbnail size OK: {}KB", size_kb);
 
         Some(file_storage::thumbnail_to_base64(&thumbnail_bytes))
     }
 
     /// Save item to database and emit event to frontend
-    fn save_and_emit(&self, item: ClipboardItem) {
-        println!("[ClipboardMonitor] Saving item: {} (type: {:?})", item.id, item.content_type);
+    /// CRITICAL: This is the final step - if this fails, the item is lost
+    /// replaced_item_id: If this item replaced an existing one (move to top), pass the old ID
+    fn save_and_emit(&self, item: ClipboardItem, replaced_item_id: Option<String>) {
+        eprintln!("╔═══════════════════════════════════════════════════════════");
+        eprintln!("║ [save_and_emit] SAVING TO DATABASE");
+        eprintln!("║   id: {}", item.id);
+        eprintln!("║   content_type: {:?}", item.content_type);
+        eprintln!("║   content_text: {:?}", item.content_text.as_ref().map(|s| {
+            if s.len() > 50 { format!("{}... ({} chars)", &s[..50], s.len()) } else { s.clone() }
+        }));
+        eprintln!("║   thumbnail_base64: {} chars", item.thumbnail_base64.as_ref().map(|s| s.len()).unwrap_or(0));
+        eprintln!("║   image_path: {:?}", item.image_path);
+        eprintln!("║   source_app: {:?}", item.source_app);
+        eprintln!("║   replaced_item_id: {:?}", replaced_item_id);
 
-        if let Err(e) = self.db.insert_item(&item) {
-            eprintln!("[ClipboardMonitor] Failed to save clipboard item: {}", e);
-            return;
+        match self.db.insert_item(&item) {
+            Ok(()) => {
+                eprintln!("║   ✓ DATABASE INSERT SUCCESS");
+            }
+            Err(e) => {
+                eprintln!("║   ✗ DATABASE INSERT FAILED: {}", e);
+                eprintln!("║   CRITICAL: Item {} is LOST!", item.id);
+                eprintln!("╚═══════════════════════════════════════════════════════════");
+                return;
+            }
         }
 
         if let Ok(limit) = self.db.get_history_limit() {
-            let _ = self.db.prune_oldest(limit);
+            if let Err(e) = self.db.prune_oldest(limit) {
+                eprintln!("║   Warning: prune_oldest failed: {}", e);
+            }
         }
 
-        println!("[ClipboardMonitor] Emitting clipboard-changed event for item: {}", item.id);
-        let payload = ClipboardChangedPayload { item };
-        if let Err(e) = self.app_handle.emit("clipboard-changed", &payload) {
-            eprintln!("[ClipboardMonitor] Failed to emit clipboard-changed event: {}", e);
-        } else {
-            println!("[ClipboardMonitor] Event emitted successfully");
+        eprintln!("║   Emitting clipboard-changed event...");
+        let payload = ClipboardChangedPayload {
+            item: item.clone(),
+            replaced_item_id,
+        };
+        match self.app_handle.emit("clipboard-changed", &payload) {
+            Ok(()) => {
+                eprintln!("║   ✓ EVENT EMITTED SUCCESSFULLY");
+            }
+            Err(e) => {
+                eprintln!("║   ✗ EVENT EMIT FAILED: {}", e);
+                eprintln!("║   Item saved to DB but frontend not notified!");
+            }
         }
+        eprintln!("╚═══════════════════════════════════════════════════════════");
     }
 
     /// Try to get the source application name and icon
@@ -753,7 +873,18 @@ mod platform {
                 let current_change_count = clipboard_reader::get_change_count();
                 if current_change_count != last_change_count {
                     last_change_count = current_change_count;
-                    handler.process_clipboard_change();
+
+                    // Small delay to let the source app finish writing to clipboard
+                    // Some apps write to clipboard asynchronously
+                    thread::sleep(Duration::from_millis(50));
+
+                    // Check if pasteboard actually has content before processing
+                    // This filters out clipboard clears and transient states
+                    if clipboard_reader::pasteboard_has_content() {
+                        handler.process_clipboard_change();
+                    } else {
+                        eprintln!("[ClipboardMonitor] changeCount {} but pasteboard is empty - skipping (likely a clear or transient state)", current_change_count);
+                    }
                 }
             }
         });

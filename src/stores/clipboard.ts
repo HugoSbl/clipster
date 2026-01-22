@@ -36,8 +36,13 @@ export const useClipboardStore = defineStore('clipboard', {
         if (item.content_type === 'text' && item.content_text) {
           return item.content_text.toLowerCase().includes(query);
         }
-        // Search in file paths
-        if (item.content_type === 'files' && item.content_text) {
+        // Search in file paths (files, audio, documents)
+        if (
+          (item.content_type === 'files' ||
+            item.content_type === 'audio' ||
+            item.content_type === 'documents') &&
+          item.content_text
+        ) {
           return item.content_text.toLowerCase().includes(query);
         }
         // Images don't have searchable text content
@@ -194,13 +199,33 @@ export const useClipboardStore = defineStore('clipboard', {
     /**
      * Add a new item to the beginning of the list
      * Called when clipboard-changed event is received
+     * @param item The new clipboard item
+     * @param replacedItemId If provided, removes this ID from the list (move to top behavior)
      */
-    addItem(item: ClipboardItem): void {
+    addItem(item: ClipboardItem, replacedItemId?: string): void {
+      console.log('[addItem] Called with:', { itemId: item.id, replacedItemId });
+      console.log('[addItem] Current items:', this.items.map((i) => i.id));
+
+      // If this item replaced an existing one (move to top), remove the old one
+      if (replacedItemId) {
+        const hadItem = this.items.some((existing) => existing.id === replacedItemId);
+        console.log('[addItem] Looking for replaced item, found:', hadItem);
+
+        if (hadItem) {
+          this.items = this.items.filter((existing) => existing.id !== replacedItemId);
+          console.log('[addItem] After removing old item:', this.items.map((i) => i.id));
+          this.items.unshift(item);
+          console.log('[addItem] After adding new item:', this.items.map((i) => i.id));
+          return;
+        }
+      }
+
       // Remove any existing item with same ID (shouldn't happen, but be safe)
       this.items = this.items.filter((existing) => existing.id !== item.id);
       // Add to beginning
       this.items.unshift(item);
       this.totalCount += 1;
+      console.log('[addItem] Added new item, total:', this.totalCount);
     },
 
     /**
@@ -211,8 +236,11 @@ export const useClipboardStore = defineStore('clipboard', {
       console.log('[ClipboardStore] Setting up clipboard-changed event listener');
       return await listen<ClipboardChangedPayload>('clipboard-changed', (event) => {
         console.log('[ClipboardStore] Received clipboard-changed event:', event.payload.item);
+        if (event.payload.replaced_item_id) {
+          console.log('[ClipboardStore] Replacing item:', event.payload.replaced_item_id);
+        }
         console.log('[ClipboardStore] Current items count before add:', this.items.length);
-        this.addItem(event.payload.item);
+        this.addItem(event.payload.item, event.payload.replaced_item_id);
         console.log('[ClipboardStore] Items count after add:', this.items.length);
       });
     },

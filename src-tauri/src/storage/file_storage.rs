@@ -168,7 +168,7 @@ pub fn decode_bmp(bmp_data: &[u8]) -> Result<DynamicImage, String> {
 }
 
 /// Generate a thumbnail from a DynamicImage
-/// Returns PNG bytes
+/// Returns PNG bytes (for clipboard images - lossless quality)
 pub fn generate_thumbnail(image: &DynamicImage, max_size: u32) -> Result<Vec<u8>, String> {
     // Calculate new dimensions preserving aspect ratio
     let (width, height) = (image.width(), image.height());
@@ -190,6 +190,31 @@ pub fn generate_thumbnail(image: &DynamicImage, max_size: u32) -> Result<Vec<u8>
         .map_err(|e| format!("Failed to encode thumbnail: {}", e))?;
 
     Ok(png_bytes)
+}
+
+/// Generate a compact thumbnail using JPEG encoding (smaller size for file previews)
+/// Returns JPEG bytes with 85% quality - typically 5-10x smaller than PNG for photos
+pub fn generate_thumbnail_jpeg(image: &DynamicImage, max_size: u32) -> Result<Vec<u8>, String> {
+    // Calculate new dimensions preserving aspect ratio
+    let (width, height) = (image.width(), image.height());
+    let (new_width, new_height) = if width > height {
+        let ratio = max_size as f32 / width as f32;
+        (max_size, (height as f32 * ratio) as u32)
+    } else {
+        let ratio = max_size as f32 / height as f32;
+        ((width as f32 * ratio) as u32, max_size)
+    };
+
+    // Resize using Lanczos3 filter for quality
+    let thumbnail = image.resize(new_width, new_height, FilterType::Lanczos3);
+
+    // Encode as JPEG with 85% quality (good balance of size and quality)
+    let mut jpeg_bytes = Vec::new();
+    thumbnail
+        .write_to(&mut Cursor::new(&mut jpeg_bytes), ImageFormat::Jpeg)
+        .map_err(|e| format!("Failed to encode thumbnail: {}", e))?;
+
+    Ok(jpeg_bytes)
 }
 
 /// Generate a thumbnail with default max size (400px)
@@ -230,18 +255,50 @@ pub fn process_clipboard_image(
 }
 
 /// Generate a thumbnail for a file (macOS)
-/// Uses Quick Look for documents (PDF, Word, etc.) and videos, and the image crate for images
+/// Uses Quick Look for documents (PDF, Word, etc.), videos, and RAW images
+/// Uses the image crate for standard image formats
 /// Returns PNG bytes on success, None if thumbnail cannot be generated
 #[cfg(target_os = "macos")]
 pub fn generate_file_thumbnail_macos(path: &Path, max_size: u32) -> Option<Vec<u8>> {
+    eprintln!("[generate_file_thumbnail_macos] Processing: {:?}", path);
+
     // Check if file exists and is accessible
     if !path.exists() {
+        eprintln!("[generate_file_thumbnail_macos] File does not exist!");
         return None;
     }
 
-    // For image files, use the image crate directly for best quality
+    let extension = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase());
+    eprintln!("[generate_file_thumbnail_macos] Extension: {:?}", extension);
+
+    // For standard image files, use the image crate directly for best quality
     if is_image_file_macos(path) {
+        eprintln!("[generate_file_thumbnail_macos] Detected as standard image -> using image crate");
         return generate_thumbnail_from_image_file(path, max_size);
+    }
+
+    // For image formats that need Quick Look (SVG, HEIC, PSD, etc.)
+    if is_quicklook_image_file(path) {
+        eprintln!("[generate_file_thumbnail_macos] Detected as Quick Look image (SVG/HEIC/PSD) -> using Quick Look");
+        let result = generate_quicklook_thumbnail(path, max_size);
+        if result.is_some() {
+            eprintln!("[generate_file_thumbnail_macos] Quick Look image thumbnail generated successfully");
+        } else {
+            eprintln!("[generate_file_thumbnail_macos] Quick Look image thumbnail failed");
+        }
+        return result;
+    }
+
+    // For RAW camera images, use Quick Look (native macOS support)
+    if is_raw_image_file(path) {
+        eprintln!("[generate_file_thumbnail_macos] Processing RAW image: {:?}", path.file_name());
+        let result = generate_quicklook_thumbnail(path, max_size);
+        if result.is_some() {
+            eprintln!("[generate_file_thumbnail_macos] RAW thumbnail generated successfully");
+        } else {
+            eprintln!("[generate_file_thumbnail_macos] RAW thumbnail generation failed");
+        }
+        return result;
     }
 
     // For video files, use Quick Look to extract a frame thumbnail
@@ -256,11 +313,13 @@ pub fn generate_file_thumbnail_macos(path: &Path, max_size: u32) -> Option<Vec<u
         return result;
     }
 
-    // For documents (PDF, Word, Excel, etc.), use Quick Look via qlmanage
+    // For documents (PDF, Word, Excel, PowerPoint, Pages, Keynote, Numbers, etc.)
+    // Quick Look handles 100+ file types natively
     generate_quicklook_thumbnail(path, max_size)
 }
 
-/// Check if a file is an image based on extension (macOS)
+/// Check if a file is an image that the `image` crate can handle directly
+/// These formats are decoded natively by the Rust image crate
 #[cfg(target_os = "macos")]
 fn is_image_file_macos(path: &Path) -> bool {
     let extension = path
@@ -270,8 +329,81 @@ fn is_image_file_macos(path: &Path) -> bool {
 
     matches!(
         extension.as_deref(),
+        // Standard formats (image crate native support)
         Some("jpg") | Some("jpeg") | Some("png") | Some("gif") | Some("bmp")
-        | Some("webp") | Some("ico") | Some("tiff") | Some("tif") | Some("heic") | Some("heif")
+        | Some("webp") | Some("ico") | Some("tiff") | Some("tif")
+        // Additional standard formats (image crate)
+        | Some("pnm") | Some("pbm") | Some("pgm") | Some("ppm") | Some("pam")
+        | Some("dds") | Some("tga") | Some("farbfeld") | Some("ff")
+        | Some("exr") | Some("hdr") | Some("qoi") | Some("avif")
+    )
+}
+
+/// Check if a file is an image format that needs Quick Look (not supported by image crate)
+/// SVG, HEIC/HEIF, and other Apple-specific formats
+#[cfg(target_os = "macos")]
+fn is_quicklook_image_file(path: &Path) -> bool {
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
+
+    matches!(
+        extension.as_deref(),
+        // Apple formats (not supported by image crate)
+        Some("heic") | Some("heif") | Some("heics")
+        // Vector formats (Quick Look renders them)
+        | Some("svg") | Some("svgz")
+        // Apple image formats
+        | Some("icns")
+        // Other formats that Quick Look handles better
+        | Some("psd") | Some("ai") | Some("eps") | Some("pdf")
+    )
+}
+
+/// Check if a file is a RAW camera image that Quick Look handles
+/// These go to Quick Look, not the image crate
+#[cfg(target_os = "macos")]
+fn is_raw_image_file(path: &Path) -> bool {
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
+
+    matches!(
+        extension.as_deref(),
+        // Canon
+        Some("cr2") | Some("cr3") | Some("crw")
+        // Nikon
+        | Some("nef") | Some("nrw")
+        // Sony
+        | Some("arw") | Some("srf") | Some("sr2")
+        // Adobe
+        | Some("dng")
+        // Fujifilm
+        | Some("raf")
+        // Olympus
+        | Some("orf")
+        // Panasonic
+        | Some("rw2")
+        // Pentax
+        | Some("pef")
+        // Samsung
+        | Some("srw")
+        // Sigma
+        | Some("x3f")
+        // Leica
+        | Some("rwl")
+        // Phase One
+        | Some("iiq")
+        // Hasselblad
+        | Some("3fr")
+        // Mamiya
+        | Some("mef")
+        // Epson
+        | Some("erf")
+        // Kodak
+        | Some("kdc") | Some("dcr")
     )
 }
 
@@ -292,10 +424,35 @@ fn is_video_file(path: &Path) -> bool {
 }
 
 /// Load file as image directly using the image crate
+/// Uses JPEG encoding for smaller file sizes (photos compress much better as JPEG)
 #[cfg(target_os = "macos")]
 fn generate_thumbnail_from_image_file(path: &Path, max_size: u32) -> Option<Vec<u8>> {
-    let image = image::open(path).ok()?;
-    generate_thumbnail(&image, max_size).ok()
+    eprintln!("[generate_thumbnail_from_image_file] Opening: {:?}", path.file_name());
+
+    let image = match image::open(path) {
+        Ok(img) => {
+            eprintln!("[generate_thumbnail_from_image_file] Loaded {}x{}", img.width(), img.height());
+            img
+        }
+        Err(e) => {
+            eprintln!("[generate_thumbnail_from_image_file] Failed to open image: {}", e);
+            // Try Quick Look as fallback for unsupported formats
+            eprintln!("[generate_thumbnail_from_image_file] Trying Quick Look fallback...");
+            return generate_quicklook_thumbnail(path, max_size);
+        }
+    };
+
+    // Use JPEG for file thumbnails (much smaller than PNG for photos)
+    match generate_thumbnail_jpeg(&image, max_size) {
+        Ok(bytes) => {
+            eprintln!("[generate_thumbnail_from_image_file] Generated {} bytes (JPEG)", bytes.len());
+            Some(bytes)
+        }
+        Err(e) => {
+            eprintln!("[generate_thumbnail_from_image_file] Failed to generate thumbnail: {}", e);
+            None
+        }
+    }
 }
 
 /// Check if Quick Look supports this file type
@@ -440,15 +597,21 @@ fn is_image_file(path: &Path) -> bool {
 
     matches!(
         extension.as_deref(),
-        Some("jpg") | Some("jpeg") | Some("png") | Some("gif") | Some("bmp") | Some("webp") | Some("ico") | Some("tiff") | Some("tif")
+        // Standard formats (image crate)
+        Some("jpg") | Some("jpeg") | Some("png") | Some("gif") | Some("bmp")
+        | Some("webp") | Some("ico") | Some("tiff") | Some("tif")
+        // Additional standard formats
+        | Some("pnm") | Some("pbm") | Some("pgm") | Some("ppm") | Some("pam")
+        | Some("dds") | Some("tga") | Some("farbfeld") | Some("ff")
+        | Some("exr") | Some("hdr")
     )
 }
 
-/// Generate thumbnail from image file using the image crate
+/// Generate thumbnail from image file using the image crate (JPEG for smaller size)
 #[cfg(target_os = "windows")]
 fn generate_thumbnail_from_image_file_windows(path: &Path, max_size: u32) -> Option<Vec<u8>> {
     let image = image::open(path).ok()?;
-    generate_thumbnail(&image, max_size).ok()
+    generate_thumbnail_jpeg(&image, max_size).ok()
 }
 
 /// Extract file type icon using Shell API and convert to PNG

@@ -2,7 +2,7 @@
  * Content type for clipboard items
  * Matches Rust enum: crate::models::ContentType
  */
-export type ContentType = 'text' | 'image' | 'files' | 'link' | 'audio';
+export type ContentType = 'text' | 'image' | 'files' | 'link' | 'audio' | 'documents';
 
 /**
  * Clipboard item structure
@@ -39,4 +39,6 @@ export interface Pinboard {
  */
 export interface ClipboardChangedPayload {
   item: ClipboardItem;
+  /** If this item replaced an existing one (move to top), contains the old item's ID */
+  replaced_item_id?: string;
 }

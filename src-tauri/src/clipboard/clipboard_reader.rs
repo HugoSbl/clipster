@@ -231,6 +231,61 @@ mod platform {
         }
     }
 
+    /// Check if the pasteboard has any content (types > 0)
+    /// Used to filter out clipboard clears and transient states
+    pub fn pasteboard_has_content() -> bool {
+        unsafe {
+            let pasteboard = NSPasteboard::generalPasteboard();
+            if let Some(types) = pasteboard.types() {
+                types.count() > 0
+            } else {
+                false
+            }
+        }
+    }
+
+    /// Log all available UTI types on the pasteboard (for debugging)
+    /// This helps identify what formats are available that we might be missing
+    fn log_pasteboard_types() {
+        unsafe {
+            let pasteboard = NSPasteboard::generalPasteboard();
+            let change_count = pasteboard.changeCount();
+            eprintln!("│   [PASTEBOARD changeCount: {}]", change_count);
+
+            let types = pasteboard.types();
+
+            eprintln!("│   [PASTEBOARD TYPES AVAILABLE]:");
+            if let Some(types) = types {
+                let count = types.count();
+                eprintln!("│     (count: {})", count);
+                for i in 0..count {
+                    let t: &NSString = &types.objectAtIndex(i);
+                    eprintln!("│     - {}", t.to_string());
+                }
+            } else {
+                eprintln!("│     (none - types() returned None)");
+            }
+
+            // Also check specific common types directly
+            eprintln!("│   [DIRECT TYPE CHECKS]:");
+            let check_types = [
+                "public.utf8-plain-text",
+                "public.tiff",
+                "public.png",
+                "public.file-url",
+                "com.apple.pboard.promised-file-url",
+                "dyn.ah62d4rv4gu8y63n2nuuhg5pbsm4ca6dbsr4gnkduqf31k3pcr7u1e3basv61a3k",
+            ];
+            for type_str in check_types {
+                let ns_type = NSString::from_str(type_str);
+                let data = pasteboard.dataForType(&ns_type);
+                let has_data = data.is_some();
+                let data_len = data.map(|d| d.len()).unwrap_or(0);
+                eprintln!("│     {} : {} ({} bytes)", type_str, if has_data { "YES" } else { "NO" }, data_len);
+            }
+        }
+    }
+
     /// Check if files are available on the pasteboard
     fn has_files_on_pasteboard() -> bool {
         unsafe {
@@ -279,22 +334,67 @@ mod platform {
 
     /// Read text from clipboard
     pub fn read_text() -> Option<String> {
-        let mut clipboard = Clipboard::new().ok()?;
-        clipboard.get_text().ok().filter(|s| !s.is_empty())
+        eprintln!("[DEBUG read_text] Attempting to read text...");
+        let mut clipboard = match Clipboard::new() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[DEBUG read_text]   Failed to create clipboard: {:?}", e);
+                return None;
+            }
+        };
+        match clipboard.get_text() {
+            Ok(text) if !text.is_empty() => {
+                eprintln!("[DEBUG read_text]   Got text: {} chars", text.len());
+                Some(text)
+            }
+            Ok(_) => {
+                eprintln!("[DEBUG read_text]   Got empty text");
+                None
+            }
+            Err(e) => {
+                eprintln!("[DEBUG read_text]   Error: {:?}", e);
+                None
+            }
+        }
     }
 
     /// Read image data from clipboard
+    /// Tries multiple methods to capture images:
+    /// 1. arboard (cross-platform, handles most cases)
+    /// 2. Native NSPasteboard TIFF data (for apps that only provide TIFF)
+    /// 3. Native NSPasteboard PNG data (for PNG-specific sources)
     pub fn read_image() -> Option<ImageData> {
         eprintln!("[DEBUG read_image] Attempting to read image from clipboard...");
 
+        // Method 1: Try arboard first (handles most cases)
+        if let Some(img_data) = read_image_arboard() {
+            return Some(img_data);
+        }
+
+        // Method 2: Try native NSPasteboard for TIFF data
+        if let Some(img_data) = read_image_native_tiff() {
+            return Some(img_data);
+        }
+
+        // Method 3: Try native NSPasteboard for PNG data
+        if let Some(img_data) = read_image_native_png() {
+            return Some(img_data);
+        }
+
+        eprintln!("[DEBUG read_image]   All methods failed - no image captured");
+        None
+    }
+
+    /// Try reading image via arboard
+    fn read_image_arboard() -> Option<ImageData> {
         let mut clipboard = Clipboard::new().ok()?;
         let img_data = match clipboard.get_image() {
             Ok(data) => {
-                eprintln!("[DEBUG read_image]   Got image: {}x{}, {} bytes RGBA", data.width, data.height, data.bytes.len());
+                eprintln!("[DEBUG read_image]   arboard: Got image {}x{}, {} bytes RGBA", data.width, data.height, data.bytes.len());
                 data
             }
             Err(e) => {
-                eprintln!("[DEBUG read_image]   No image in clipboard: {:?}", e);
+                eprintln!("[DEBUG read_image]   arboard: No image - {:?}", e);
                 return None;
             }
         };
@@ -313,7 +413,7 @@ mod platform {
             .write_to(&mut std::io::Cursor::new(&mut png_data), image::ImageFormat::Png)
             .ok()?;
 
-        eprintln!("[DEBUG read_image]   Encoded to PNG: {} bytes", png_data.len());
+        eprintln!("[DEBUG read_image]   arboard: Encoded to PNG: {} bytes", png_data.len());
 
         Some(ImageData {
             png_data,
@@ -322,36 +422,174 @@ mod platform {
         })
     }
 
+    /// Try reading image via native NSPasteboard TIFF data
+    /// Some apps (like Preview, some browsers) provide TIFF format
+    fn read_image_native_tiff() -> Option<ImageData> {
+        use objc2_app_kit::NSBitmapImageRep;
+
+        eprintln!("[DEBUG read_image]   Trying NSPasteboard TIFF...");
+
+        unsafe {
+            let pasteboard = NSPasteboard::generalPasteboard();
+            let tiff_type = NSString::from_str("public.tiff");
+
+            // Check if TIFF data is available
+            let data = match pasteboard.dataForType(&tiff_type) {
+                Some(d) => d,
+                None => {
+                    eprintln!("[DEBUG read_image]   NSPasteboard TIFF: No data available");
+                    return None;
+                }
+            };
+
+            eprintln!("[DEBUG read_image]   NSPasteboard TIFF: Found {} bytes", data.len());
+
+            // Create bitmap rep from TIFF data
+            let bitmap_rep = match NSBitmapImageRep::imageRepWithData(&data) {
+                Some(rep) => rep,
+                None => {
+                    eprintln!("[DEBUG read_image]   NSPasteboard TIFF: Failed to create bitmap rep");
+                    return None;
+                }
+            };
+
+            let width = bitmap_rep.pixelsWide() as u32;
+            let height = bitmap_rep.pixelsHigh() as u32;
+
+            eprintln!("[DEBUG read_image]   NSPasteboard TIFF: Decoded {}x{}", width, height);
+
+            // Convert to PNG
+            use objc2_app_kit::NSBitmapImageFileType;
+            use objc2_foundation::NSDictionary;
+
+            let png_data = match bitmap_rep.representationUsingType_properties(
+                NSBitmapImageFileType::PNG,
+                &NSDictionary::new(),
+            ) {
+                Some(d) => d,
+                None => {
+                    eprintln!("[DEBUG read_image]   NSPasteboard TIFF: Failed to convert to PNG");
+                    return None;
+                }
+            };
+
+            let png_bytes = png_data.bytes().to_vec();
+            eprintln!("[DEBUG read_image]   NSPasteboard TIFF: Encoded to PNG: {} bytes", png_bytes.len());
+
+            Some(ImageData {
+                png_data: png_bytes,
+                width,
+                height,
+            })
+        }
+    }
+
+    /// Try reading image via native NSPasteboard PNG data
+    fn read_image_native_png() -> Option<ImageData> {
+        eprintln!("[DEBUG read_image]   Trying NSPasteboard PNG...");
+
+        unsafe {
+            let pasteboard = NSPasteboard::generalPasteboard();
+            let png_type = NSString::from_str("public.png");
+
+            // Check if PNG data is available
+            let data = match pasteboard.dataForType(&png_type) {
+                Some(d) => d,
+                None => {
+                    eprintln!("[DEBUG read_image]   NSPasteboard PNG: No data available");
+                    return None;
+                }
+            };
+            let png_bytes = data.bytes().to_vec();
+
+            eprintln!("[DEBUG read_image]   NSPasteboard PNG: Found {} bytes", png_bytes.len());
+
+            // Decode to get dimensions
+            let img = match image::load_from_memory(&png_bytes) {
+                Ok(i) => i,
+                Err(e) => {
+                    eprintln!("[DEBUG read_image]   NSPasteboard PNG: Failed to decode: {}", e);
+                    return None;
+                }
+            };
+            let width = img.width();
+            let height = img.height();
+
+            eprintln!("[DEBUG read_image]   NSPasteboard PNG: Decoded {}x{}", width, height);
+
+            Some(ImageData {
+                png_data: png_bytes,
+                width,
+                height,
+            })
+        }
+    }
+
     /// Read file list from clipboard using native NSPasteboard
     pub fn read_files() -> Option<Vec<String>> {
+        use percent_encoding::percent_decode_str;
+
+        eprintln!("[DEBUG read_files] Attempting to read files...");
+
         unsafe {
             let pasteboard = NSPasteboard::generalPasteboard();
             let file_url_type = NSString::from_str("public.file-url");
 
             // Get pasteboard items
-            let items = pasteboard.pasteboardItems()?;
+            let items = match pasteboard.pasteboardItems() {
+                Some(i) => i,
+                None => {
+                    eprintln!("[DEBUG read_files]   No pasteboard items");
+                    return None;
+                }
+            };
+
+            let item_count = items.count();
+            eprintln!("[DEBUG read_files]   Found {} pasteboard items", item_count);
+
             let mut file_paths: Vec<String> = Vec::new();
 
-            for i in 0..items.count() {
+            for i in 0..item_count {
                 let item = items.objectAtIndex(i);
+
+                // Log all types available for this item
+                let types = item.types();
+                let type_count = types.count();
+                eprintln!("[DEBUG read_files]   Item {} has {} types", i, type_count);
+                for j in 0..type_count {
+                    let t: &NSString = &types.objectAtIndex(j);
+                    eprintln!("[DEBUG read_files]     - {}", t.to_string());
+                }
+
                 // Get the file URL string from the item
                 if let Some(url_string) = item.stringForType(&file_url_type) {
                     // Convert file:// URL to path
                     let url_str: String = url_string.to_string();
+                    eprintln!("[DEBUG read_files]   Item {} file URL: {}", i, url_str);
                     if let Some(nsurl) = NSURL::URLWithString(&NSString::from_str(&url_str)) {
                         if let Some(path) = nsurl.path() {
                             let path_str: String = path.to_string();
                             if !path_str.is_empty() {
-                                file_paths.push(path_str);
+                                // Decode URL-encoded characters (e.g., %20 -> space)
+                                let decoded_path = percent_decode_str(&path_str)
+                                    .decode_utf8()
+                                    .map(|s| s.to_string())
+                                    .unwrap_or(path_str);
+                                eprintln!("[DEBUG read_files]   Decoded path: {}", decoded_path);
+                                file_paths.push(decoded_path);
                             }
                         }
                     }
+                } else {
+                    eprintln!("[DEBUG read_files]   Item {} has no public.file-url", i);
                 }
             }
 
             if file_paths.is_empty() {
+                eprintln!("[DEBUG read_files]   No file paths found");
                 None
             } else {
+                eprintln!("[DEBUG read_files]   Found {} files: {:?}", file_paths.len(), file_paths);
                 Some(file_paths)
             }
         }
@@ -364,6 +602,9 @@ mod platform {
     pub fn read_clipboard() -> ClipboardContent {
         eprintln!("┌─────────────────────────────────────────────────────────────");
         eprintln!("│ [DEBUG read_clipboard] Checking clipboard content...");
+
+        // LOG ALL AVAILABLE TYPES for debugging capture failures
+        log_pasteboard_types();
 
         // Check what's available
         let has_files = read_files();
@@ -383,6 +624,11 @@ mod platform {
                 eprintln!("│ → Using FILES (original paths preserved): {:?}", file_list);
                 eprintln!("└─────────────────────────────────────────────────────────────");
                 return ClipboardContent::Files(file_list.clone());
+            } else if !files_exist {
+                eprintln!("│   WARNING: Files detected but don't exist on disk!");
+                for f in file_list {
+                    eprintln!("│     - {} (exists: {})", f, std::path::Path::new(f).exists());
+                }
             }
         }
 
@@ -408,7 +654,8 @@ mod platform {
             return ClipboardContent::Text(text);
         }
 
-        eprintln!("│ → EMPTY clipboard");
+        eprintln!("│ → EMPTY clipboard (no files, no image, no text)");
+        eprintln!("│   This may indicate an unsupported UTI type - check types above");
         eprintln!("└─────────────────────────────────────────────────────────────");
         ClipboardContent::Empty
     }

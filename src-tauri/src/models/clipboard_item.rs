@@ -12,6 +12,7 @@ pub enum ContentType {
     Files,
     Link,
     Audio,
+    Documents,
 }
 
 impl ContentType {
@@ -22,6 +23,7 @@ impl ContentType {
             ContentType::Files => "files",
             ContentType::Link => "link",
             ContentType::Audio => "audio",
+            ContentType::Documents => "documents",
         }
     }
 
@@ -32,6 +34,7 @@ impl ContentType {
             "files" => Some(ContentType::Files),
             "link" => Some(ContentType::Link),
             "audio" => Some(ContentType::Audio),
+            "documents" => Some(ContentType::Documents),
             _ => None,
         }
     }
@@ -65,10 +68,23 @@ impl ContentType {
         }
     }
 
-    /// Check if file paths contain audio files
+    /// Check if file paths contain audio or document files
     pub fn detect_from_files(paths: &[String]) -> Self {
         let audio_extensions = [
             "mp3", "wav", "flac", "aac", "ogg", "wma", "m4a", "aiff", "alac", "opus"
+        ];
+
+        let document_extensions = [
+            // PDF
+            "pdf",
+            // Microsoft Office
+            "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+            // OpenDocument
+            "odt", "ods", "odp",
+            // Apple iWork
+            "pages", "numbers", "keynote",
+            // Other common document formats
+            "rtf", "txt", "csv",
         ];
 
         let all_audio = !paths.is_empty() && paths.iter().all(|path| {
@@ -76,8 +92,15 @@ impl ContentType {
             audio_extensions.iter().any(|ext| lower.ends_with(&format!(".{}", ext)))
         });
 
+        let all_documents = !paths.is_empty() && paths.iter().all(|path| {
+            let lower = path.to_lowercase();
+            document_extensions.iter().any(|ext| lower.ends_with(&format!(".{}", ext)))
+        });
+
         if all_audio {
             ContentType::Audio
+        } else if all_documents {
+            ContentType::Documents
         } else {
             ContentType::Files
         }
@@ -239,9 +262,9 @@ impl ClipboardItem {
         }
     }
 
-    /// Get file paths for Files type items
+    /// Get file paths for Files, Audio, or Documents type items
     pub fn get_file_paths(&self) -> Option<Vec<String>> {
-        if self.content_type != ContentType::Files {
+        if !matches!(self.content_type, ContentType::Files | ContentType::Audio | ContentType::Documents) {
             return None;
         }
         self.content_text
@@ -327,6 +350,22 @@ impl ClipboardItem {
                     }
                 } else {
                     "[Audio]".to_string()
+                }
+            }
+            ContentType::Documents => {
+                if let Some(paths) = self.get_file_paths() {
+                    if paths.len() == 1 {
+                        // Get just the filename
+                        paths[0]
+                            .rsplit(['/', '\\'])
+                            .next()
+                            .unwrap_or(&paths[0])
+                            .to_string()
+                    } else {
+                        format!("{} documents", paths.len())
+                    }
+                } else {
+                    "[Documents]".to_string()
                 }
             }
         }

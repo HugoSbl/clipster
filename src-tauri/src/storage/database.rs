@@ -384,19 +384,46 @@ impl Database {
         Ok(deleted)
     }
 
-    /// Check if content already exists (deduplication)
+    /// Check if content already exists in UNPINNED history (not in pinboards)
+    /// This allows the same content to exist both in history and in pinboards
     pub fn content_exists(&self, content_text: &str) -> Result<bool, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         let exists: bool = conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM clipboard_items WHERE content_text = ?1 LIMIT 1)",
+                "SELECT EXISTS(SELECT 1 FROM clipboard_items WHERE content_text = ?1 AND pinboard_id IS NULL LIMIT 1)",
                 params![content_text],
                 |row| row.get(0),
             )
             .map_err(|e| format!("Failed to check content existence: {}", e))?;
 
         Ok(exists)
+    }
+
+    /// Delete unpinned items with matching content (for "move to top" behavior)
+    /// Returns the ID of the deleted item (if any) for frontend notification
+    /// Does NOT delete pinned items - they are preserved separately
+    pub fn delete_unpinned_by_content(&self, content_text: &str) -> Result<Option<String>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        // First, get the ID of the item we're about to delete
+        let existing_id: Option<String> = conn
+            .query_row(
+                "SELECT id FROM clipboard_items WHERE content_text = ?1 AND pinboard_id IS NULL LIMIT 1",
+                params![content_text],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if existing_id.is_some() {
+            conn.execute(
+                "DELETE FROM clipboard_items WHERE content_text = ?1 AND pinboard_id IS NULL",
+                params![content_text],
+            )
+            .map_err(|e| format!("Failed to delete by content: {}", e))?;
+        }
+
+        Ok(existing_id)
     }
 
     // ==================== PINBOARDS ====================

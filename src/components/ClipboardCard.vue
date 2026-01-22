@@ -78,6 +78,19 @@ const headerLabel = computed(() => {
     }
   }
 
+  // For documents, show the filename
+  if (type === 'documents' && props.item.content_text) {
+    try {
+      const files = JSON.parse(props.item.content_text) as string[];
+      if (files.length > 0) {
+        const name = files[0].split(/[/\\]/).pop() || files[0];
+        return files.length > 1 ? `${name} +${files.length - 1}` : name;
+      }
+    } catch {
+      // Fall through to default
+    }
+  }
+
   // Default type labels
   const typeLabels: Record<string, string> = {
     text: 'Text',
@@ -85,6 +98,7 @@ const headerLabel = computed(() => {
     files: 'File',
     link: 'Link',
     audio: 'Audio',
+    documents: 'Document',
     video: 'Video',
   };
 
@@ -119,9 +133,23 @@ const audioInfo = computed(() => {
   }
 });
 
-// Get file info
+// Get file info (for files type)
 const fileInfo = computed(() => {
   if (props.item.content_type !== 'files' || !props.item.content_text) {
+    return { count: 0, names: [] as string[] };
+  }
+  try {
+    const files = JSON.parse(props.item.content_text) as string[];
+    const names = files.map((f) => f.split(/[/\\]/).pop() || f);
+    return { count: files.length, names };
+  } catch {
+    return { count: 0, names: [] as string[] };
+  }
+});
+
+// Get document info (for documents type - PDF, Word, Excel, etc.)
+const documentInfo = computed(() => {
+  if (props.item.content_type !== 'documents' || !props.item.content_text) {
     return { count: 0, names: [] as string[] };
   }
   try {
@@ -142,6 +170,23 @@ const hasVisualPreview = computed(() => {
     return true;
   }
   return false;
+});
+
+// Get thumbnail data URL with correct MIME type (auto-detect PNG vs JPEG)
+const thumbnailDataUrl = computed(() => {
+  if (!props.item.thumbnail_base64) return '';
+  const base64 = props.item.thumbnail_base64;
+  // Detect image type from base64 signature
+  // PNG starts with: iVBORw0KGgo (base64 of \x89PNG)
+  // JPEG starts with: /9j/ (base64 of \xFF\xD8\xFF)
+  // GIF starts with: R0lGOD (base64 of GIF)
+  if (base64.startsWith('/9j/')) {
+    return `data:image/jpeg;base64,${base64}`;
+  } else if (base64.startsWith('R0lGOD')) {
+    return `data:image/gif;base64,${base64}`;
+  }
+  // Default to PNG
+  return `data:image/png;base64,${base64}`;
 });
 
 // Handle card click
@@ -279,22 +324,17 @@ const prepareImageForDrag = async (
   }
 };
 
-// Get file paths for native drag (files and audio - NOT images)
+// Get file paths for native drag (files, audio, documents - NOT images)
 const getFilePaths = (): string[] => {
   const item = props.item;
 
-  // For files, parse the JSON array from content_text
-  if (item.content_type === 'files' && item.content_text) {
-    try {
-      const files = JSON.parse(item.content_text) as string[];
-      return files.filter((f) => f && typeof f === 'string');
-    } catch {
-      return [];
-    }
-  }
-
-  // For audio files
-  if (item.content_type === 'audio' && item.content_text) {
+  // For files, documents, or audio - parse the JSON array from content_text
+  if (
+    (item.content_type === 'files' ||
+      item.content_type === 'audio' ||
+      item.content_type === 'documents') &&
+    item.content_text
+  ) {
     try {
       const files = JSON.parse(item.content_text) as string[];
       return files.filter((f) => f && typeof f === 'string');
@@ -528,7 +568,7 @@ const handleDragEnd = () => {
     <!-- Preview image container -->
     <div class="visual-content">
       <img
-        :src="`data:image/png;base64,${item.thumbnail_base64}`"
+        :src="thumbnailDataUrl"
         :alt="item.content_type === 'image' ? 'Image' : 'File preview'"
         class="visual-preview"
         loading="lazy"
@@ -585,6 +625,13 @@ const handleDragEnd = () => {
             <path d="M9 18V5l12-2v13" />
             <circle cx="6" cy="18" r="3" />
             <circle cx="18" cy="16" r="3" />
+          </svg>
+          <svg v-else-if="item.content_type === 'documents'" class="badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+            <line x1="10" y1="9" x2="8" y2="9" />
           </svg>
           <svg v-else class="badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10" />
@@ -664,6 +711,21 @@ const handleDragEnd = () => {
         </div>
         <p class="audio-count">{{ audioInfo.count }} audio{{ audioInfo.count !== 1 ? ' files' : '' }}</p>
         <p v-if="audioInfo.names.length > 0" class="audio-name">{{ audioInfo.names[0] }}</p>
+      </div>
+
+      <!-- Documents Content (PDF, Word, Excel, etc.) -->
+      <div v-else-if="item.content_type === 'documents'" class="documents-content">
+        <div class="documents-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+            <line x1="10" y1="9" x2="8" y2="9" />
+          </svg>
+        </div>
+        <p class="documents-count">{{ documentInfo.count }} document{{ documentInfo.count !== 1 ? 's' : '' }}</p>
+        <p v-if="documentInfo.names.length > 0" class="documents-name">{{ documentInfo.names[0] }}</p>
       </div>
 
       <!-- Delete button overlay (same position as visual cards) -->
@@ -825,6 +887,10 @@ const handleDragEnd = () => {
   background: linear-gradient(135deg, #fdf2f8 0%, #fce7f3 100%);
 }
 
+.header-documents {
+  background: linear-gradient(135deg, #ecfeff 0%, #cffafe 100%);
+}
+
 .header-left {
   display: flex;
   align-items: center;
@@ -871,6 +937,11 @@ const handleDragEnd = () => {
 
 .badge-audio {
   background: #ec4899;
+  color: white;
+}
+
+.badge-documents {
+  background: #0891b2;
   color: white;
 }
 
@@ -1093,6 +1164,44 @@ const handleDragEnd = () => {
   white-space: nowrap;
 }
 
+/* Documents Content (PDF, Word, Excel, etc.) */
+.documents-content {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.documents-icon {
+  width: 32px;
+  height: 32px;
+  color: #0891b2;
+}
+
+.documents-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.documents-count {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: #374151;
+}
+
+.documents-name {
+  margin: 0;
+  font-size: 10px;
+  color: #6b7280;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Dark mode */
 @media (prefers-color-scheme: dark) {
   .clipboard-card {
@@ -1125,6 +1234,10 @@ const handleDragEnd = () => {
     background: linear-gradient(135deg, #831843 0%, #db277720 100%);
   }
 
+  .header-documents {
+    background: linear-gradient(135deg, #164e63 0%, #0891b220 100%);
+  }
+
   .header-label {
     color: #e5e7eb;
   }
@@ -1147,13 +1260,19 @@ const handleDragEnd = () => {
   }
 
   .file-count,
-  .audio-count {
+  .audio-count,
+  .documents-count {
     color: #e5e7eb;
   }
 
   .file-name,
-  .audio-name {
+  .audio-name,
+  .documents-name {
     color: #9ca3af;
+  }
+
+  .documents-icon {
+    color: #22d3ee;
   }
 
   .link-domain {

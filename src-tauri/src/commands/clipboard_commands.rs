@@ -82,7 +82,9 @@ pub fn copy_to_clipboard(
             // TODO: Implement image copy
             return Err("Image copy not yet implemented".to_string());
         }
-        crate::models::ContentType::Files | crate::models::ContentType::Audio => {
+        crate::models::ContentType::Files
+        | crate::models::ContentType::Audio
+        | crate::models::ContentType::Documents => {
             // TODO: Implement file copy
             return Err("File copy not yet implemented".to_string());
         }
