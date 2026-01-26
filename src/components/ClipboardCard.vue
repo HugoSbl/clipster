@@ -2,8 +2,8 @@
 import { computed, ref } from 'vue';
 import type { ClipboardItem } from '@/types';
 import { usePinboardStore } from '@/stores/pinboards';
-import { startDrag } from '@crabnebula/tauri-plugin-drag';
 import { invoke } from '@tauri-apps/api/core';
+import { startDrag } from '@crabnebula/tauri-plugin-drag';
 
 const props = defineProps<{
   item: ClipboardItem;
@@ -20,8 +20,6 @@ const pinboardStore = usePinboardStore();
 
 // Refs
 const cardRef = ref<HTMLElement | null>(null);
-
-// Drag state
 const isDragging = ref(false);
 
 // Format timestamp for display
@@ -110,7 +108,6 @@ const urlPreview = computed(() => {
   if (props.item.content_type !== 'link' || !props.item.content_text) return '';
   const url = props.item.content_text;
   try {
-    // Handle www. prefix
     const urlToParse = url.startsWith('www.') ? `https://${url}` : url;
     const parsed = new URL(urlToParse);
     return parsed.hostname.replace('www.', '');
@@ -176,20 +173,14 @@ const hasVisualPreview = computed(() => {
 const thumbnailDataUrl = computed(() => {
   if (!props.item.thumbnail_base64) return '';
   const base64 = props.item.thumbnail_base64;
-  // Detect image type from base64 signature
-  // PNG starts with: iVBORw0KGgo (base64 of \x89PNG)
-  // JPEG starts with: /9j/ (base64 of \xFF\xD8\xFF)
-  // GIF starts with: R0lGOD (base64 of GIF)
   if (base64.startsWith('/9j/')) {
     return `data:image/jpeg;base64,${base64}`;
   } else if (base64.startsWith('R0lGOD')) {
     return `data:image/gif;base64,${base64}`;
   }
-  // Default to PNG
   return `data:image/png;base64,${base64}`;
 });
 
-// Handle card click
 // Handle double click to copy
 const handleDoubleClick = () => {
   emit('copy', props.item);
@@ -206,59 +197,6 @@ const handleClick = () => {
   emit('select', props.item);
 };
 
-// Store for cleanup
-let dragClone: HTMLElement | null = null;
-
-// Copy computed styles from source to target element (inline)
-const copyStyles = (source: Element, target: HTMLElement) => {
-  const computed = window.getComputedStyle(source);
-  for (const prop of computed) {
-    try {
-      target.style.setProperty(prop, computed.getPropertyValue(prop));
-    } catch {
-      // Some properties can't be set
-    }
-  }
-};
-
-// Recursively copy styles to all descendants
-const deepCopyStyles = (source: Element, target: Element) => {
-  copyStyles(source, target as HTMLElement);
-  const sourceChildren = source.children;
-  const targetChildren = target.children;
-  for (let i = 0; i < sourceChildren.length && i < targetChildren.length; i++) {
-    deepCopyStyles(sourceChildren[i], targetChildren[i]);
-  }
-};
-
-// Create an exact clone of the card with inline styles
-const createExactClone = (): HTMLElement | null => {
-  if (!cardRef.value) return null;
-
-  const rect = cardRef.value.getBoundingClientRect();
-
-  // Clone the entire card
-  const clone = cardRef.value.cloneNode(true) as HTMLElement;
-
-  // Copy all computed styles inline (this isolates the clone from CSS)
-  deepCopyStyles(cardRef.value, clone);
-
-  // Set fixed dimensions and position
-  clone.style.position = 'fixed';
-  clone.style.left = '-9999px';
-  clone.style.top = '-9999px';
-  clone.style.width = `${rect.width}px`;
-  clone.style.height = `${rect.height}px`;
-  clone.style.margin = '0';
-  clone.style.transform = 'none';
-  clone.style.pointerEvents = 'none';
-  clone.style.zIndex = '99999';
-  clone.style.opacity = '1';
-  clone.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.2)';
-
-  return clone;
-};
-
 // Sanitize a string to be safe for filenames
 const sanitizeFilename = (name: string): string => {
   return name
@@ -267,9 +205,41 @@ const sanitizeFilename = (name: string): string => {
     .substring(0, 50);
 };
 
+/**
+ * Sanitize a file path before sending to Rust
+ * 1. Remove file:// prefix if present
+ * 2. Decode URI-encoded characters (%20 -> space, etc.)
+ * 3. Returns a clean OS path (e.g., /Users/name/file.png)
+ */
+const sanitizePath = (path: string): string => {
+  let cleanPath = path;
+
+  // Remove file:// or file:/// prefix
+  if (cleanPath.startsWith('file:///')) {
+    cleanPath = cleanPath.substring(7); // Remove 'file://' (keep leading /)
+  } else if (cleanPath.startsWith('file://')) {
+    cleanPath = cleanPath.substring(7);
+  }
+
+  // Decode URI-encoded characters (%20 -> space, etc.)
+  try {
+    cleanPath = decodeURIComponent(cleanPath);
+  } catch {
+    // If decoding fails, use the path as-is
+    console.warn('[sanitizePath] Failed to decode:', path);
+  }
+
+  // On Windows, handle drive letter paths (e.g., /C:/Users -> C:/Users)
+  if (/^\/[A-Za-z]:/.test(cleanPath)) {
+    cleanPath = cleanPath.substring(1);
+  }
+
+  return cleanPath;
+};
+
 // Generate a readable filename from item metadata
 const generateReadableFilename = (item: ClipboardItem): string => {
-  const sourceApp = item.source_app ? sanitizeFilename(item.source_app) : 'Image';
+  const sourceApp = item.source_app ? sanitizeFilename(item.source_app) : 'Clipster';
   const date = new Date(item.created_at);
   const timestamp = [
     date.getFullYear(),
@@ -286,40 +256,20 @@ const generateReadableFilename = (item: ClipboardItem): string => {
 };
 
 // Prepare image for drag by copying to temp with readable name
-// Returns { imagePath, iconPath } for separate drag item and icon
 const prepareImageForDrag = async (
   item: ClipboardItem
 ): Promise<{ imagePath: string; iconPath: string } | null> => {
-  console.log('═══════════════════════════════════════════════════════════');
-  console.log('[DEBUG prepareImageForDrag] CALLED');
-  console.log('[DEBUG]   item.id:', item.id);
-  console.log('[DEBUG]   item.content_type:', item.content_type);
-  console.log('[DEBUG]   item.image_path:', item.image_path);
-
-  if (!item.image_path) {
-    console.log('[DEBUG]   No image_path, returning null');
-    return null;
-  }
+  if (!item.image_path) return null;
 
   try {
     const readableFilename = generateReadableFilename(item);
-    console.log('[DEBUG]   readableFilename:', readableFilename);
-    console.log('[DEBUG]   Calling Rust prepare_image_for_drag...');
-
     const [imagePath, iconPath] = await invoke<[string, string]>('prepare_image_for_drag', {
       sourcePath: item.image_path,
       readableFilename,
     });
-
-    console.log('[DEBUG]   Rust returned:');
-    console.log('[DEBUG]     imagePath:', imagePath);
-    console.log('[DEBUG]     iconPath:', iconPath);
-    console.log('═══════════════════════════════════════════════════════════');
-
     return { imagePath, iconPath };
   } catch (err) {
-    console.error('[DEBUG]   ERROR from Rust:', err);
-    // Fallback: use same path for both
+    console.error('[ClipboardCard] prepareImageForDrag error:', err);
     return { imagePath: item.image_path, iconPath: item.image_path };
   }
 };
@@ -328,7 +278,6 @@ const prepareImageForDrag = async (
 const getFilePaths = (): string[] => {
   const item = props.item;
 
-  // For files, documents, or audio - parse the JSON array from content_text
   if (
     (item.content_type === 'files' ||
       item.content_type === 'audio' ||
@@ -338,7 +287,8 @@ const getFilePaths = (): string[] => {
     try {
       const files = JSON.parse(item.content_text) as string[];
       return files.filter((f) => f && typeof f === 'string');
-    } catch {
+    } catch (err) {
+      console.warn('[ClipboardCard] getFilePaths: Invalid JSON', err);
       return [];
     }
   }
@@ -346,170 +296,301 @@ const getFilePaths = (): string[] => {
   return [];
 };
 
-// Get file paths for drag, with async handling for images
-// Returns { items, icon } - items is array of file paths, icon is the preview image
+// Get file paths for drag, with async handling for images/text/links
 const getFilePathsForDrag = async (): Promise<{ items: string[]; icon: string }> => {
   const item = props.item;
 
-  console.log('───────────────────────────────────────────────────────────');
-  console.log('[DEBUG getFilePathsForDrag] CALLED');
-  console.log('[DEBUG]   content_type:', item.content_type);
-
   // For images, prepare with readable filename and separate icon
   if (item.content_type === 'image' && item.image_path) {
-    console.log('[DEBUG]   Type=image, calling prepareImageForDrag...');
     const prepared = await prepareImageForDrag(item);
     if (prepared) {
-      console.log('[DEBUG]   Returning for image drag:');
-      console.log('[DEBUG]     items:', [prepared.imagePath]);
-      console.log('[DEBUG]     icon:', prepared.iconPath);
       return { items: [prepared.imagePath], icon: prepared.iconPath };
     }
-    console.log('[DEBUG]   prepareImageForDrag returned null!');
     return { items: [], icon: '' };
   }
 
-  // For other types, use sync method (icon = first file)
+  // For text, create a temporary text file
+  if (item.content_type === 'text' && item.content_text) {
+    try {
+      const readableFilename = generateReadableFilename(item).replace(/\.(png|jpg|jpeg)$/, '.txt');
+      const textPath = await invoke<string>('create_temp_text_file', {
+        content: item.content_text,
+        filename: readableFilename,
+      });
+      return { items: [textPath], icon: textPath };
+    } catch (err) {
+      console.error('[ClipboardCard] create_temp_text_file failed:', err);
+      return { items: [], icon: '' };
+    }
+  }
+
+  // For links, create a platform-specific link file
+  if (item.content_type === 'link' && item.content_text) {
+    try {
+      const sourceApp = item.source_app ? sanitizeFilename(item.source_app) : 'Link';
+      const date = new Date(item.created_at);
+      const timestamp = [
+        date.getFullYear(),
+        String(date.getMonth() + 1).padStart(2, '0'),
+        String(date.getDate()).padStart(2, '0'),
+        '_',
+        String(date.getHours()).padStart(2, '0'),
+        String(date.getMinutes()).padStart(2, '0'),
+      ].join('');
+      const filename = `${sourceApp}_${timestamp}`;
+
+      const linkPath = await invoke<string>('create_temp_link_file', {
+        url: item.content_text,
+        filename,
+      });
+      return { items: [linkPath], icon: linkPath };
+    } catch (err) {
+      console.error('[ClipboardCard] create_temp_link_file failed:', err);
+      return { items: [], icon: '' };
+    }
+  }
+
+  // For files, audio, documents - parse JSON paths directly
   const paths = getFilePaths();
-  console.log('[DEBUG]   Type=files/audio, using getFilePaths:');
-  console.log('[DEBUG]     paths:', paths);
-  console.log('[DEBUG]     icon will be:', paths[0] || '(empty)');
   return { items: paths, icon: paths[0] || '' };
 };
 
 // Check if item can be dragged as native files
 const canDragAsFiles = computed(() => {
   const item = props.item;
-  // Images can always be dragged (will be prepared async)
+
   if (item.content_type === 'image' && item.image_path) {
     return true;
   }
-  // For other types, check sync paths
+
+  if ((item.content_type === 'text' || item.content_type === 'link') && item.content_text) {
+    return true;
+  }
+
   const paths = getFilePaths();
   return paths.length > 0;
 });
 
-// Native drag state
-let dragStartPos: { x: number; y: number } | null = null;
-let dragStarted = false;
-const DRAG_THRESHOLD = 5; // pixels before drag starts
+// ============================================================================
+// DRAG & DROP IMPLEMENTATION (Native + Custom Ghost)
+// ============================================================================
+//
+// - NO HTML5 drag (avoids textClipping)
+// - Custom ghost element follows mouse (visual feedback)
+// - Native drag via plugin (real files)
+// - Internal drops via mouseup + elementFromPoint
+//
+// ============================================================================
 
-// Handle native file drag (for files, images, audio)
-const handleNativeDragStart = (e: MouseEvent) => {
-  if (!canDragAsFiles.value) return;
-  if (e.button !== 0) return;
+const dragGhost = ref<HTMLElement | null>(null);
+const dragStartPos = ref<{ x: number; y: number } | null>(null);
+const pendingDragPaths = ref<string[]>([]);
+const pendingDragIcon = ref<string>('');
+const hasTriggeredNative = ref(false);
+const lastClickTime = ref(0);
 
-  // Record start position for drag detection
-  dragStartPos = { x: e.clientX, y: e.clientY };
-  dragStarted = false;
+const DRAG_THRESHOLD = 5;
+const EDGE_MARGIN = 50;
+const DOUBLE_CLICK_DELAY = 300;
 
-  // Add listeners for drag detection
-  document.addEventListener('mousemove', handleNativeDragMove);
-  document.addEventListener('mouseup', handleNativeDragEnd);
+/**
+ * Check if near window edge
+ */
+const isNearEdge = (x: number, y: number): boolean => {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  return x <= EDGE_MARGIN || x >= w - EDGE_MARGIN || y <= EDGE_MARGIN || y >= h - EDGE_MARGIN;
 };
 
-const handleNativeDragMove = async (e: MouseEvent) => {
-  if (!dragStartPos || dragStarted) return;
+/**
+ * Create ghost element (clone of card)
+ */
+const createGhost = () => {
+  if (!cardRef.value || dragGhost.value) return;
 
-  const dx = Math.abs(e.clientX - dragStartPos.x);
-  const dy = Math.abs(e.clientY - dragStartPos.y);
+  const ghost = cardRef.value.cloneNode(true) as HTMLElement;
+  ghost.style.position = 'fixed';
+  ghost.style.pointerEvents = 'none';
+  ghost.style.zIndex = '9999';
+  ghost.style.opacity = '0.8';
+  ghost.style.transform = 'scale(0.8)';
+  ghost.style.transition = 'none';
+  ghost.style.width = `${cardRef.value.offsetWidth}px`;
+  ghost.style.height = `${cardRef.value.offsetHeight}px`;
+  document.body.appendChild(ghost);
+  dragGhost.value = ghost;
+};
 
-  // Only start drag if moved beyond threshold
+/**
+ * Update ghost position
+ */
+const updateGhostPosition = (x: number, y: number) => {
+  if (!dragGhost.value) return;
+  dragGhost.value.style.left = `${x - dragGhost.value.offsetWidth / 2}px`;
+  dragGhost.value.style.top = `${y - dragGhost.value.offsetHeight / 2}px`;
+};
+
+/**
+ * Remove ghost element
+ */
+const removeGhost = () => {
+  if (dragGhost.value) {
+    dragGhost.value.remove();
+    dragGhost.value = null;
+  }
+};
+
+/**
+ * Mousedown - start tracking
+ */
+const handleMouseDown = async (e: MouseEvent) => {
+  if (!canDragAsFiles.value || e.button !== 0) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  dragStartPos.value = { x: e.clientX, y: e.clientY };
+  hasTriggeredNative.value = false;
+
+  // Prepare paths
+  try {
+    const { items } = await getFilePathsForDrag();
+    pendingDragPaths.value = items.map(sanitizePath);
+
+    invoke<string>('create_drag_icon', { path: pendingDragPaths.value[0] })
+      .then((icon) => { pendingDragIcon.value = icon; })
+      .catch(() => { pendingDragIcon.value = pendingDragPaths.value[0]; });
+  } catch (err) {
+    console.error('[handleMouseDown] Error:', err);
+  }
+
+  document.addEventListener('mousemove', handleMouseMove);
+  document.addEventListener('mouseup', handleMouseUp);
+};
+
+/**
+ * Mousemove - update ghost + detect edge
+ */
+const handleMouseMove = async (e: MouseEvent) => {
+  if (!dragStartPos.value || hasTriggeredNative.value) return;
+
+  const dx = Math.abs(e.clientX - dragStartPos.value.x);
+  const dy = Math.abs(e.clientY - dragStartPos.value.y);
+
+  // Start dragging after threshold
   if (dx > DRAG_THRESHOLD || dy > DRAG_THRESHOLD) {
-    dragStarted = true;
-
-    console.log('▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶');
-    console.log('[DEBUG handleNativeDragMove] DRAG THRESHOLD EXCEEDED');
-
-    // Use async method to get paths (handles image renaming)
-    const { items, icon } = await getFilePathsForDrag();
-
-    console.log('[DEBUG]   getFilePathsForDrag returned:');
-    console.log('[DEBUG]     items:', items);
-    console.log('[DEBUG]     icon:', icon);
-
-    if (items.length === 0) {
-      console.log('[DEBUG]   No items to drag, aborting');
-      return;
+    if (!isDragging.value) {
+      isDragging.value = true;
+      pinboardStore.setDragging(true, props.item.id);
+      createGhost();
     }
 
-    isDragging.value = true;
-    pinboardStore.setDragging(true, props.item.id);
+    updateGhostPosition(e.clientX, e.clientY);
 
-    try {
-      console.log('[DEBUG]   CALLING startDrag() with:');
-      console.log('[DEBUG]     item:', items);
-      console.log('[DEBUG]     icon:', icon);
-      console.log('▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶▶');
+    // Check if near edge - trigger native drag
+    if (isNearEdge(e.clientX, e.clientY) && pendingDragPaths.value.length > 0) {
+      console.log('[handleMouseMove] Near edge - starting native drag');
+      hasTriggeredNative.value = true;
 
-      await startDrag({
-        item: items,
-        icon: icon,
-      });
+      // Cleanup before async
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      removeGhost();
 
-      console.log('[DEBUG]   startDrag() completed successfully');
-    } catch (err) {
-      console.debug('[DEBUG]   startDrag() error:', err);
-    } finally {
-      isDragging.value = false;
-      pinboardStore.setDragging(false, null);
-      cleanup();
-    }
-  }
-};
+      try {
+        await invoke('hide_window');
+        await new Promise((r) => setTimeout(r, 50));
 
-const handleNativeDragEnd = () => {
-  cleanup();
-};
-
-const cleanup = () => {
-  dragStartPos = null;
-  dragStarted = false;
-  document.removeEventListener('mousemove', handleNativeDragMove);
-  document.removeEventListener('mouseup', handleNativeDragEnd);
-};
-
-// Native HTML5 drag handlers (for text, links - internal drag)
-const handleDragStart = (e: DragEvent) => {
-  // Skip HTML5 drag for file types - they use native drag
-  if (canDragAsFiles.value) {
-    e.preventDefault();
-    return;
-  }
-
-  if (!e.dataTransfer || !cardRef.value) return;
-
-  isDragging.value = true;
-  pinboardStore.setDragging(true, props.item.id);
-
-  // Set drag data with multiple formats for compatibility
-  e.dataTransfer.setData('text/plain', props.item.content_text || '');
-  e.dataTransfer.setData('application/x-clipboard-item', props.item.id);
-  e.dataTransfer.effectAllowed = 'move';
-
-  // Create exact clone with inline styles to avoid WebView ghost bugs
-  dragClone = createExactClone();
-  if (dragClone) {
-    document.body.appendChild(dragClone);
-
-    const rect = cardRef.value.getBoundingClientRect();
-    const offsetX = e.clientX - rect.left;
-    const offsetY = e.clientY - rect.top;
-    e.dataTransfer.setDragImage(dragClone, offsetX, offsetY);
-
-    // Clean up clone after a short delay (drag image is captured synchronously)
-    setTimeout(() => {
-      if (dragClone) {
-        dragClone.remove();
-        dragClone = null;
+        await startDrag({
+          item: pendingDragPaths.value,
+          icon: pendingDragIcon.value || pendingDragPaths.value[0],
+        });
+      } catch (err) {
+        console.error('[handleMouseMove] Native drag error:', err);
+        await invoke('show_window');
       }
-    }, 100);
+
+      cleanupDrag();
+    }
   }
 };
 
-const handleDragEnd = () => {
+/**
+ * Mouseup - internal drop, click, or cancel
+ */
+const handleMouseUp = (e: MouseEvent) => {
+  document.removeEventListener('mousemove', handleMouseMove);
+  document.removeEventListener('mouseup', handleMouseUp);
+
+  // If we weren't dragging (mouse didn't move past threshold), treat as click
+  if (!isDragging.value && dragStartPos.value) {
+    const dx = Math.abs(e.clientX - dragStartPos.value.x);
+    const dy = Math.abs(e.clientY - dragStartPos.value.y);
+
+    if (dx <= DRAG_THRESHOLD && dy <= DRAG_THRESHOLD) {
+      // This was a click, not a drag
+      const now = Date.now();
+      const timeSinceLastClick = now - lastClickTime.value;
+
+      if (timeSinceLastClick < DOUBLE_CLICK_DELAY) {
+        // Double-click - copy the item
+        cleanupDrag();
+        emit('copy', props.item);
+        lastClickTime.value = 0; // Reset to prevent triple-click issues
+        return;
+      } else {
+        // Single click - select the item
+        lastClickTime.value = now;
+        cleanupDrag();
+        emit('select', props.item);
+        return;
+      }
+    }
+  }
+
+  if (isDragging.value && !hasTriggeredNative.value) {
+    // IMPORTANT: Hide ghost BEFORE elementFromPoint so it doesn't block detection
+    const ghostWasVisible = !!dragGhost.value;
+    if (dragGhost.value) {
+      dragGhost.value.style.display = 'none';
+    }
+
+    // Check for internal drop target
+    const dropTarget = document.elementFromPoint(e.clientX, e.clientY);
+    const dropZone = dropTarget?.closest('[data-drop-zone]');
+
+    if (dropZone) {
+      const zoneId = dropZone.getAttribute('data-drop-zone');
+      console.log('[handleMouseUp] Drop on zone:', zoneId);
+
+      dropZone.dispatchEvent(new CustomEvent('clipster-internal-drop', {
+        detail: { itemId: props.item.id, zoneId },
+        bubbles: true,
+      }));
+    } else {
+      console.log('[handleMouseUp] No drop zone found at', e.clientX, e.clientY, 'target:', dropTarget);
+    }
+
+    // Restore ghost visibility (will be removed in cleanup anyway)
+    if (ghostWasVisible && dragGhost.value) {
+      dragGhost.value.style.display = '';
+    }
+  }
+
+  cleanupDrag();
+};
+
+/**
+ * Cleanup all drag state
+ */
+const cleanupDrag = () => {
+  removeGhost();
   isDragging.value = false;
   pinboardStore.setDragging(false, null);
+  dragStartPos.value = null;
+  pendingDragPaths.value = [];
+  pendingDragIcon.value = '';
+  hasTriggeredNative.value = false;
 };
 </script>
 
@@ -523,14 +604,16 @@ const handleDragEnd = () => {
       selected: selected,
       dragging: isDragging,
     }"
-    :draggable="!canDragAsFiles"
     @click="handleClick"
     @dblclick="handleDoubleClick"
-    @mousedown="handleNativeDragStart"
-    @dragstart="handleDragStart"
-    @dragend="handleDragEnd"
   >
-    <!-- Card Header (same as standard cards) -->
+    <!-- TRANSPARENT SHIELD: Native drag + custom ghost visual -->
+    <div
+      v-if="canDragAsFiles"
+      class="drag-shield"
+      @mousedown="handleMouseDown"
+    ></div>
+    <!-- Card Header -->
     <div class="card-header" :class="`header-${item.content_type}`">
       <div class="header-left">
         <span class="type-badge" :class="`badge-${item.content_type}`">
@@ -553,7 +636,6 @@ const handleDragEnd = () => {
           :alt="item.source_app || 'Source'"
           :title="item.source_app || 'Source app'"
           class="source-icon"
-          draggable="false"
         />
         <span v-else class="source-icon-placeholder" :title="item.source_app || 'Unknown'">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -572,7 +654,6 @@ const handleDragEnd = () => {
         :alt="item.content_type === 'image' ? 'Image' : 'File preview'"
         class="visual-preview"
         loading="lazy"
-        draggable="false"
       />
       <!-- File count badge (for multiple files) -->
       <div v-if="item.content_type === 'files' && fileInfo.count > 1" class="visual-badge">
@@ -592,13 +673,15 @@ const handleDragEnd = () => {
       selected: selected,
       dragging: isDragging,
     }"
-    :draggable="!canDragAsFiles"
     @click="handleClick"
     @dblclick="handleDoubleClick"
-    @mousedown="handleNativeDragStart"
-    @dragstart="handleDragStart"
-    @dragend="handleDragEnd"
   >
+    <!-- TRANSPARENT SHIELD: Native drag + custom ghost visual -->
+    <div
+      v-if="canDragAsFiles"
+      class="drag-shield"
+      @mousedown="handleMouseDown"
+    ></div>
     <!-- Card Header -->
     <div class="card-header" :class="`header-${item.content_type}`">
       <div class="header-left">
@@ -649,7 +732,6 @@ const handleDragEnd = () => {
           :alt="item.source_app || 'Source'"
           :title="item.source_app || 'Source app'"
           class="source-icon"
-          draggable="false"
         />
         <span v-else class="source-icon-placeholder" :title="item.source_app || 'Unknown'">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -728,7 +810,7 @@ const handleDragEnd = () => {
         <p v-if="documentInfo.names.length > 0" class="documents-name">{{ documentInfo.names[0] }}</p>
       </div>
 
-      <!-- Delete button overlay (same position as visual cards) -->
+      <!-- Delete button overlay -->
       <button class="visual-delete" @click="handleDelete" title="Delete">×</button>
     </div>
   </div>
@@ -750,18 +832,41 @@ const handleDragEnd = () => {
   transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
   overflow: hidden;
   position: relative;
-  /* Prevent text selection */
+  /* Prevent text selection and image dragging */
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
 
+/**
+ * TRANSPARENT SHIELD PATTERN
+ * This invisible overlay captures all drag events before they reach
+ * internal text/image elements, preventing unwanted selection.
+ * The shield sits on top of content but below interactive elements (delete button).
+ */
+.drag-shield {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1; /* Above content, below delete button (z-index: 2) */
+  cursor: grab;
+  /* Completely transparent - no visual change */
+  background: transparent;
+  /* Shield must NOT block click events for underlying card */
+  /* But MUST capture drag events - this is the key trick */
+}
+
+.drag-shield:active {
+  cursor: grabbing;
+}
+
+/* Prevent text selection on all child elements */
 .clipboard-card * {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
-  /* Note: Images use draggable="false" attribute for cross-platform support */
-  /* -webkit-user-drag is WebKit-only and doesn't work on Windows/Chromium */
 }
 
 .clipboard-card:active {
@@ -773,9 +878,18 @@ const handleDragEnd = () => {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
-/* ============================================
-   Visual Preview Card (image/file with thumbnail)
-   ============================================ */
+.clipboard-card.selected {
+  border-color: #3b82f6;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.clipboard-card.dragging {
+  opacity: 0.5;
+  transform: scale(0.95);
+  cursor: grabbing;
+}
+
+/* Visual Preview Card */
 .visual-card {
   /* Uses same structure as standard card */
 }
@@ -807,6 +921,7 @@ const handleDragEnd = () => {
 }
 
 /* Delete button - same style for all cards */
+/* z-index: 2 to appear ABOVE the drag-shield (z-index: 1) */
 .visual-delete {
   position: absolute;
   bottom: 8px;
@@ -828,9 +943,9 @@ const handleDragEnd = () => {
   transition: opacity 0.15s, background-color 0.15s, transform 0.15s;
   backdrop-filter: blur(4px);
   box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
+  z-index: 2; /* Above drag-shield */
 }
 
-/* Show delete button on hover for ALL card types */
 .clipboard-card:hover .visual-delete,
 .visual-card:hover .visual-delete {
   opacity: 1;
@@ -841,18 +956,6 @@ const handleDragEnd = () => {
   transform: scale(1.1);
   box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
 }
-
-.clipboard-card.selected {
-  border-color: #3b82f6;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
-}
-
-.clipboard-card.dragging {
-  opacity: 0.5;
-  transform: scale(0.95);
-  cursor: grabbing;
-}
-
 
 /* Card Header */
 .card-header {
@@ -999,7 +1102,7 @@ const handleDragEnd = () => {
   padding: 6px 10px;
   overflow: hidden;
   min-height: 0;
-  position: relative; /* For delete button positioning */
+  position: relative;
 }
 
 /* Text Content */
@@ -1027,13 +1130,6 @@ const handleDragEnd = () => {
   align-items: center;
   justify-content: center;
   position: relative;
-}
-
-.thumbnail {
-  max-width: 100%;
-  max-height: 120px;
-  border-radius: 6px;
-  object-fit: contain;
 }
 
 .thumbnail-placeholder {
@@ -1164,7 +1260,7 @@ const handleDragEnd = () => {
   white-space: nowrap;
 }
 
-/* Documents Content (PDF, Word, Excel, etc.) */
+/* Documents Content */
 .documents-content {
   height: 100%;
   display: flex;
@@ -1213,7 +1309,6 @@ const handleDragEnd = () => {
     border-color: #60a5fa;
   }
 
-  /* Dark mode header colors */
   .header-text {
     background: linear-gradient(135deg, #1e3a5f 0%, #1e40af20 100%);
   }

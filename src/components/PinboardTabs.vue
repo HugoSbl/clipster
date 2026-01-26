@@ -1,9 +1,32 @@
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue';
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue';
 import { usePinboardStore } from '@/stores/pinboards';
 import type { Pinboard } from '@/types';
 
 const store = usePinboardStore();
+
+// Handle custom internal drop events from ClipboardCard's mouse-based drag
+const handleInternalDrop = async (e: Event) => {
+  const customEvent = e as CustomEvent<{ itemId: string; zoneId: string }>;
+  const { itemId, zoneId } = customEvent.detail;
+
+  console.log('[PinboardTabs] Internal drop:', itemId, 'to', zoneId);
+
+  if (zoneId === 'history') {
+    await store.removeItemFromPinboard(itemId);
+  } else if (zoneId.startsWith('pinboard-')) {
+    const pinboardId = zoneId.replace('pinboard-', '');
+    await store.addItemToPinboard(itemId, pinboardId);
+  }
+};
+
+onMounted(() => {
+  document.addEventListener('clipster-internal-drop', handleInternalDrop);
+});
+
+onUnmounted(() => {
+  document.removeEventListener('clipster-internal-drop', handleInternalDrop);
+});
 
 // Available icons for pinboards
 const availableIcons = [
@@ -224,6 +247,7 @@ const handleClickOutside = () => {
     <!-- History Tab -->
     <button
       class="tab history-tab"
+      data-drop-zone="history"
       :class="{
         active: activePinboardId === null,
         'drop-target': dropTargetId === 'history',
@@ -244,6 +268,7 @@ const handleClickOutside = () => {
         v-for="pinboard in sortedPinboards"
         :key="pinboard.id"
         class="tab-drop-zone"
+        :data-drop-zone="`pinboard-${pinboard.id}`"
         :class="{
           'drop-target': dropTargetId === pinboard.id,
           'drop-ready': isDraggingItem && dropTargetId !== pinboard.id
