@@ -355,32 +355,62 @@ const getFilePathsForDrag = async (): Promise<{ items: string[]; icon: string }>
   return { items: paths, icon: paths[0] || '' };
 };
 
-// Check if item can be dragged as native files
-const canDragAsFiles = computed(() => {
+// Check if item can be dragged as native files (NOT text - text uses HTML5)
+const canDragAsNativeFiles = computed(() => {
   const item = props.item;
 
+  // Images drag as files
   if (item.content_type === 'image' && item.image_path) {
     return true;
   }
 
-  if ((item.content_type === 'text' || item.content_type === 'link') && item.content_text) {
+  // Links drag as .webloc files
+  if (item.content_type === 'link' && item.content_text) {
     return true;
   }
 
+  // Files, audio, documents drag as files
   const paths = getFilePaths();
   return paths.length > 0;
 });
 
+// Check if item is text (uses HTML5 drag for direct paste)
+const isTextItem = computed(() => {
+  return props.item.content_type === 'text' && props.item.content_text;
+});
+
 // ============================================================================
-// DRAG & DROP IMPLEMENTATION (Native + Custom Ghost)
+// DRAG & DROP IMPLEMENTATION
 // ============================================================================
 //
-// - NO HTML5 drag (avoids textClipping)
-// - Custom ghost element follows mouse (visual feedback)
-// - Native drag via plugin (real files)
-// - Internal drops via mouseup + elementFromPoint
+// TWO MODES:
+// 1. TEXT ITEMS: HTML5 drag with text/plain (pastes directly into text fields)
+// 2. FILE ITEMS: Custom mouse + native plugin (drops real files to Finder)
 //
 // ============================================================================
+
+/**
+ * HTML5 Drag for TEXT items - allows direct paste into text fields
+ */
+const handleTextDragStart = (e: DragEvent) => {
+  // Only handle if this is a text item
+  if (!isTextItem.value || !e.dataTransfer || !props.item.content_text) return;
+
+  e.dataTransfer.effectAllowed = 'copyMove';
+  e.dataTransfer.setData('text/plain', props.item.content_text);
+  e.dataTransfer.setData('application/x-clipboard-item', props.item.id);
+
+  isDragging.value = true;
+  pinboardStore.setDragging(true, props.item.id);
+};
+
+const handleTextDragEnd = () => {
+  // Only handle if this is a text item
+  if (!isTextItem.value) return;
+
+  isDragging.value = false;
+  pinboardStore.setDragging(false, null);
+};
 
 const dragGhost = ref<HTMLElement | null>(null);
 const dragStartPos = ref<{ x: number; y: number } | null>(null);
@@ -441,10 +471,10 @@ const removeGhost = () => {
 };
 
 /**
- * Mousedown - start tracking
+ * Mousedown - start tracking (for native file drag only, NOT text)
  */
 const handleMouseDown = async (e: MouseEvent) => {
-  if (!canDragAsFiles.value || e.button !== 0) return;
+  if (!canDragAsNativeFiles.value || e.button !== 0) return;
 
   e.preventDefault();
   e.stopPropagation();
@@ -607,9 +637,9 @@ const cleanupDrag = () => {
     @click="handleClick"
     @dblclick="handleDoubleClick"
   >
-    <!-- TRANSPARENT SHIELD: Native drag + custom ghost visual -->
+    <!-- TRANSPARENT SHIELD: Native drag for files (NOT text) -->
     <div
-      v-if="canDragAsFiles"
+      v-if="canDragAsNativeFiles"
       class="drag-shield"
       @mousedown="handleMouseDown"
     ></div>
@@ -673,12 +703,15 @@ const cleanupDrag = () => {
       selected: selected,
       dragging: isDragging,
     }"
+    :draggable="isTextItem ? true : false"
     @click="handleClick"
     @dblclick="handleDoubleClick"
+    @dragstart="handleTextDragStart"
+    @dragend="handleTextDragEnd"
   >
-    <!-- TRANSPARENT SHIELD: Native drag + custom ghost visual -->
+    <!-- TRANSPARENT SHIELD: Native drag for files (NOT text - text uses HTML5) -->
     <div
-      v-if="canDragAsFiles"
+      v-if="canDragAsNativeFiles"
       class="drag-shield"
       @mousedown="handleMouseDown"
     ></div>
