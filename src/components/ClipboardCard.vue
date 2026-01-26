@@ -471,12 +471,14 @@ const EDGE_MARGIN = 50;
 const DOUBLE_CLICK_DELAY = 300;
 
 /**
- * Check if near window edge
+ * Check if near window edge (for triggering native drag)
+ * EXCLUDES top edge - pins are at the top, we want to allow drops there
  */
 const isNearEdge = (x: number, y: number): boolean => {
   const w = window.innerWidth;
   const h = window.innerHeight;
-  return x <= EDGE_MARGIN || x >= w - EDGE_MARGIN || y <= EDGE_MARGIN || y >= h - EDGE_MARGIN;
+  // Left, right, or bottom edge - NOT top (where pins are)
+  return x <= EDGE_MARGIN || x >= w - EDGE_MARGIN || y >= h - EDGE_MARGIN;
 };
 
 /**
