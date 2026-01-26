@@ -64,13 +64,29 @@ const editingIcon = ref('📌');
 const editInputRef = ref<HTMLInputElement | null>(null);
 const editPopoverPosition = ref({ x: 0, y: 0 });
 
-// Drop target state for native drag
+// Drop target state for HTML5 drag
 const dropTargetId = ref<string | null>(null);
 
 // Computed
 const sortedPinboards = computed(() => store.sortedPinboards);
 const activePinboardId = computed(() => store.activePinboardId);
 const isDraggingItem = computed(() => store.isDraggingItem);
+
+// Combined drop target: HTML5 drag OR custom mouse drag
+const activeDropTarget = computed(() => {
+  // HTML5 drag has priority (when using text drag)
+  if (dropTargetId.value) return dropTargetId.value;
+  // Custom mouse drag (for files) - convert zone ID format
+  if (store.hoveredDropZone) {
+    // Store uses 'pinboard-{id}' format, we need just '{id}' for pinboards
+    if (store.hoveredDropZone === 'history') return 'history';
+    if (store.hoveredDropZone.startsWith('pinboard-')) {
+      return store.hoveredDropZone.replace('pinboard-', '');
+    }
+    return store.hoveredDropZone;
+  }
+  return null;
+});
 
 // Handle tab click
 const handleTabClick = (pinboardId: string | null) => {
@@ -250,8 +266,8 @@ const handleClickOutside = () => {
       data-drop-zone="history"
       :class="{
         active: activePinboardId === null,
-        'drop-target': dropTargetId === 'history',
-        'drop-ready': isDraggingItem && dropTargetId !== 'history'
+        'drop-target': activeDropTarget === 'history',
+        'drop-ready': isDraggingItem && activeDropTarget !== 'history'
       }"
       @click="handleTabClick(null)"
       @dragover="handleDragOver($event, 'history')"
@@ -270,8 +286,8 @@ const handleClickOutside = () => {
         class="tab-drop-zone"
         :data-drop-zone="`pinboard-${pinboard.id}`"
         :class="{
-          'drop-target': dropTargetId === pinboard.id,
-          'drop-ready': isDraggingItem && dropTargetId !== pinboard.id
+          'drop-target': activeDropTarget === pinboard.id,
+          'drop-ready': isDraggingItem && activeDropTarget !== pinboard.id
         }"
         @dragover="handleDragOver($event, pinboard.id)"
         @dragleave="handleDragLeave"

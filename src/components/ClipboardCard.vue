@@ -566,6 +566,25 @@ const handleMouseMove = async (e: MouseEvent) => {
 
     updateGhostPosition(e.clientX, e.clientY);
 
+    // Find drop zone under cursor for visual highlighting
+    // Hide ghost temporarily to get element underneath
+    if (dragGhost.value) {
+      dragGhost.value.style.display = 'none';
+    }
+    const elementUnder = document.elementFromPoint(e.clientX, e.clientY);
+    const dropZone = elementUnder?.closest('[data-drop-zone]');
+    if (dragGhost.value) {
+      dragGhost.value.style.display = '';
+    }
+
+    // Update store with hovered zone (for PinboardTabs highlighting)
+    if (dropZone) {
+      const zoneId = dropZone.getAttribute('data-drop-zone');
+      pinboardStore.$patch({ hoveredDropZone: zoneId });
+    } else {
+      pinboardStore.$patch({ hoveredDropZone: null });
+    }
+
     // Check if near edge - trigger native drag
     if (isNearEdge(e.clientX, e.clientY) && pendingDragPaths.value.length > 0) {
       console.log('[handleMouseMove] Near edge - starting native drag');
