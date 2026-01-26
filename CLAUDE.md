@@ -61,8 +61,22 @@ listen<ClipboardChangedPayload>('clipboard-changed', (event) => {
 
 - **Vue**: `<script setup>` with Composition API, NO Options API
 - **State**: Pinia stores with typed actions and getters
-- **Drag & Drop**: HTML5 for internal drag, `tauri-plugin-drag` for native file drag to external apps
+- **Drag & Drop**: Hybrid approach (HTML5 + tauri-plugin-drag)
+  - HTML5 dragstart: Visual feedback, dataTransfer payload
+  - Plugin fallback: Actual file transfer to OS (triggered automatically)
+  - Limitation: HTML5 text/uri-list doesn't create real file drops
+  - macOS: Plugin required for actual files (HTML5 creates .webloc bookmarks)
+  - Windows: Plugin required (WebView2 doesn't support HTML5 file drag-out)
 - **Platform code**: Use `#[cfg(target_os = "...")]` for platform-specific Rust
+
+## Drag & Drop Details
+
+**Rust Commands for Drag**:
+- `prepare_image_for_drag(source_path, filename)` → (image_path, icon_path)
+- `create_temp_text_file(content, filename)` → temp_path
+- `create_temp_link_file(url, filename)` → .webloc/.url path
+
+**Key Pattern**: Event target filtering (NOT CSS pointer-events)
 
 ## ⚠️ Gotchas
 

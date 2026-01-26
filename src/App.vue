@@ -28,6 +28,9 @@ let unlistenFn: UnlistenFn | null = null;
 let unlistenSettings: UnlistenFn | null = null;
 let unlistenBlur: UnlistenFn | null = null;
 
+// Store preventDefault function for cleanup
+let preventDefaults: ((e: Event) => void) | null = null;
+
 // Hide window with slide-down animation
 const hideWithAnimation = async () => {
   if (isHiding.value) return;
@@ -41,6 +44,19 @@ const hideWithAnimation = async () => {
 };
 
 onMounted(async () => {
+  // Prevent default browser behavior for drag and drop
+  // This prevents Tauri from opening dropped files in the window
+  preventDefaults = (e: Event) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  // Block all drop events globally
+  document.addEventListener('dragover', preventDefaults, false);
+  document.addEventListener('dragenter', preventDefaults, false);
+  document.addEventListener('dragleave', preventDefaults, false);
+  document.addEventListener('drop', preventDefaults, false);
+
   // Fetch pinboards, settings, and initial history
   await Promise.all([
     pinboardStore.fetchPinboards(),
@@ -88,6 +104,14 @@ onUnmounted(() => {
   }
   if (unlistenBlur) {
     unlistenBlur();
+  }
+
+  // Remove global drop prevention listeners
+  if (preventDefaults) {
+    document.removeEventListener('dragover', preventDefaults, false);
+    document.removeEventListener('dragenter', preventDefaults, false);
+    document.removeEventListener('dragleave', preventDefaults, false);
+    document.removeEventListener('drop', preventDefaults, false);
   }
 });
 

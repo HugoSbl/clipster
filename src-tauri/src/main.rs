@@ -7,9 +7,10 @@ mod models;
 mod storage;
 
 use commands::clipboard_commands::{
-    assign_to_pinboard, clear_clipboard_history, copy_to_clipboard, delete_clipboard_item,
-    get_clipboard, get_clipboard_count, get_clipboard_history, get_clipboard_item,
-    get_image_data, prepare_image_for_drag, search_clipboard, toggle_favorite,
+    assign_to_pinboard, clear_clipboard_history, copy_to_clipboard, create_drag_icon,
+    create_temp_link_file, create_temp_text_file, delete_clipboard_item, get_clipboard,
+    get_clipboard_count, get_clipboard_history, get_clipboard_item, get_image_data,
+    prepare_image_for_drag, search_clipboard, toggle_favorite,
 };
 use commands::pinboard_commands::{
     add_item_to_pinboard, create_pinboard, delete_pinboard, get_pinboard, get_pinboard_items,
@@ -206,6 +207,9 @@ fn main() {
             get_clipboard_count,
             get_image_data,
             prepare_image_for_drag,
+            create_temp_text_file,
+            create_temp_link_file,
+            create_drag_icon,
             // Pinboard commands
             get_pinboards,
             get_pinboard,

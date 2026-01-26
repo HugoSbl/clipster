@@ -573,6 +573,7 @@ mod platform {
                                 // Decode URL-encoded characters (e.g., %20 -> space)
                                 let decoded_path = percent_decode_str(&path_str)
                                     .decode_utf8()
+                                    .ok()
                                     .map(|s| s.to_string())
                                     .unwrap_or(path_str);
                                 eprintln!("[DEBUG read_files]   Decoded path: {}", decoded_path);

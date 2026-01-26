@@ -29,12 +29,14 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.0", features = ["v4"] }
 dirs = "5.0"
 base64 = "0.22"
+percent-encoding = "2.3"
 
 # Image processing (for thumbnails)
 image = "0.24"
 
 # Cross-platform clipboard (arboard works on Windows, macOS, Linux)
 arboard = "3.4"
+# Native drag & drop
 tauri-plugin-drag = "2.1.0"
 
 # Windows-specific dependencies
