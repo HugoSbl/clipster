@@ -402,14 +402,50 @@ const handleTextDragStart = (e: DragEvent) => {
 
   isDragging.value = true;
   pinboardStore.setDragging(true, props.item.id);
+
+  // Add listener to hide window when drag leaves the app
+  document.addEventListener('dragleave', handleTextDragLeave);
+  document.addEventListener('dragover', handleTextDragOver);
+};
+
+// Track if we're still inside the window during text drag
+let textDragInsideWindow = true;
+
+const handleTextDragOver = () => {
+  // We're inside the window
+  textDragInsideWindow = true;
+};
+
+const handleTextDragLeave = async (e: DragEvent) => {
+  // Check if we're leaving the document (not just an element)
+  const x = e.clientX;
+  const y = e.clientY;
+
+  // If mouse is outside window bounds, hide the window
+  if (x <= 0 || y <= 0 || x >= window.innerWidth || y >= window.innerHeight) {
+    textDragInsideWindow = false;
+
+    // Small delay to confirm we're really outside
+    setTimeout(async () => {
+      if (!textDragInsideWindow && isDragging.value) {
+        console.log('[handleTextDragLeave] Left window, hiding app');
+        await invoke('hide_window');
+      }
+    }, 50);
+  }
 };
 
 const handleTextDragEnd = () => {
   // Only handle if this is a text item
   if (!isTextItem.value) return;
 
+  // Remove listeners
+  document.removeEventListener('dragleave', handleTextDragLeave);
+  document.removeEventListener('dragover', handleTextDragOver);
+
   isDragging.value = false;
   pinboardStore.setDragging(false, null);
+  textDragInsideWindow = true;
 };
 
 const dragGhost = ref<HTMLElement | null>(null);
