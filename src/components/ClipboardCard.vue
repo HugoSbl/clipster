@@ -417,22 +417,33 @@ const handleTextDragOver = () => {
 };
 
 const handleTextDragLeave = async (e: DragEvent) => {
-  // Check if we're leaving the document (not just an element)
+  // Only hide when truly leaving the window, not when moving between elements
+  // relatedTarget is null when leaving to outside the browser/app
+  const relatedTarget = e.relatedTarget as Node | null;
+
+  // If relatedTarget exists and is inside the document, we're just moving between elements
+  if (relatedTarget && document.contains(relatedTarget)) {
+    return;
+  }
+
+  // Double-check with coordinates - must be outside window bounds
   const x = e.clientX;
   const y = e.clientY;
+  const isOutside = x <= 0 || x >= window.innerWidth || y <= 0 || y >= window.innerHeight;
 
-  // If mouse is outside window bounds, hide the window
-  if (x <= 0 || y <= 0 || x >= window.innerWidth || y >= window.innerHeight) {
-    textDragInsideWindow = false;
-
-    // Small delay to confirm we're really outside
-    setTimeout(async () => {
-      if (!textDragInsideWindow && isDragging.value) {
-        console.log('[handleTextDragLeave] Left window, hiding app');
-        await invoke('hide_window');
-      }
-    }, 50);
+  if (!isOutside) {
+    return;
   }
+
+  textDragInsideWindow = false;
+
+  // Small delay to confirm we're really outside
+  setTimeout(async () => {
+    if (!textDragInsideWindow && isDragging.value) {
+      console.log('[handleTextDragLeave] Left window, hiding app');
+      await invoke('hide_window');
+    }
+  }, 50);
 };
 
 const handleTextDragEnd = () => {
