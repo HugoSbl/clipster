@@ -103,6 +103,54 @@ const headerLabel = computed(() => {
   return typeLabels[type] || 'Unknown';
 });
 
+// File extension for footer type badge
+const fileExtension = computed(() => {
+  const type = props.item.content_type;
+
+  if (type === 'text') return 'TXT';
+  if (type === 'link') return 'URL';
+
+  if (type === 'image') {
+    if (props.item.image_path) {
+      const ext = props.item.image_path.split('.').pop()?.toUpperCase();
+      if (ext) return ext;
+    }
+    return 'IMG';
+  }
+
+  if (type === 'files' || type === 'audio' || type === 'documents') {
+    if (props.item.content_text) {
+      try {
+        const files = JSON.parse(props.item.content_text) as string[];
+        if (files.length > 0) {
+          const ext = files[0].split('.').pop()?.toUpperCase();
+          if (ext) return ext;
+        }
+      } catch {
+        // Fall through to defaults
+      }
+    }
+    if (type === 'files') return 'FILE';
+    if (type === 'audio') return 'MP3';
+    return 'PDF';
+  }
+
+  return 'FILE';
+});
+
+// Raw RGB string per type for CSS custom properties
+const typeColorRgb = computed(() => {
+  const colors: Record<string, string> = {
+    text: '59,130,246',
+    image: '139,92,246',
+    files: '34,197,94',
+    link: '249,115,22',
+    audio: '236,72,153',
+    documents: '8,145,178',
+  };
+  return colors[props.item.content_type] || '107,114,128';
+});
+
 // Get URL preview (domain only)
 const urlPreview = computed(() => {
   if (props.item.content_type !== 'link' || !props.item.content_text) return '';
@@ -713,17 +761,20 @@ const cleanupDrag = () => {
 </script>
 
 <template>
-  <!-- Visual Preview Card (Image/File with thumbnail) -->
   <div
-    v-if="hasVisualPreview"
     ref="cardRef"
-    class="clipboard-card visual-card"
+    class="clipboard-card"
     :class="{
+      'visual-card': hasVisualPreview,
       selected: selected,
       dragging: isDragging,
     }"
+    :style="{ '--type-rgb': typeColorRgb }"
+    :draggable="isTextItem ? true : false"
     @click="handleClick"
     @dblclick="handleDoubleClick"
+    @dragstart="handleTextDragStart"
+    @dragend="handleTextDragEnd"
   >
     <!-- TRANSPARENT SHIELD: Native drag for files (NOT text) -->
     <div
@@ -731,194 +782,78 @@ const cleanupDrag = () => {
       class="drag-shield"
       @mousedown="handleMouseDown"
     ></div>
-    <!-- Card Header -->
-    <div class="card-header" :class="`header-${item.content_type}`">
-      <div class="header-left">
-        <span class="type-badge" :class="`badge-${item.content_type}`">
-          <svg v-if="item.content_type === 'image'" class="badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-            <circle cx="8.5" cy="8.5" r="1.5" />
-            <polyline points="21 15 16 10 5 21" />
-          </svg>
-          <svg v-else-if="item.content_type === 'files'" class="badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-          </svg>
-        </span>
-        <span class="header-label">{{ headerLabel }}</span>
-      </div>
-      <div class="header-right">
-        <span class="timestamp">{{ formattedTime }}</span>
-        <img
-          v-if="item.source_app_icon"
-          :src="`data:image/png;base64,${item.source_app_icon}`"
-          :alt="item.source_app || 'Source'"
-          :title="item.source_app || 'Source app'"
-          class="source-icon"
-        />
-        <span v-else class="source-icon-placeholder" :title="item.source_app || 'Unknown'">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-            <line x1="3" y1="9" x2="21" y2="9" />
-            <line x1="9" y1="21" x2="9" y2="9" />
-          </svg>
-        </span>
-      </div>
+
+    <!-- Header row: glass title pill + glass delete pill -->
+    <div class="card-header">
+      <span class="glass-pill header-label">{{ headerLabel }}</span>
+      <button class="glass-pill delete-btn" @click="handleDelete" title="Delete">&times;</button>
     </div>
 
-    <!-- Preview image container -->
-    <div class="visual-content">
+    <!-- Content: Visual (image) or Standard -->
+    <div v-if="hasVisualPreview" class="visual-content">
       <img
         :src="thumbnailDataUrl"
         :alt="item.content_type === 'image' ? 'Image' : 'File preview'"
         class="visual-preview"
         loading="lazy"
       />
-      <!-- File count badge (for multiple files) -->
-      <div v-if="item.content_type === 'files' && fileInfo.count > 1" class="visual-badge">
+      <div v-if="item.content_type === 'files' && fileInfo.count > 1" class="glass-pill visual-badge">
         +{{ fileInfo.count - 1 }}
       </div>
-      <!-- Delete button overlay -->
-      <button class="visual-delete" @click="handleDelete" title="Delete">×</button>
-    </div>
-  </div>
-
-  <!-- Standard Card (Text, Link, Audio, Files without preview) -->
-  <div
-    v-else
-    ref="cardRef"
-    class="clipboard-card"
-    :class="{
-      selected: selected,
-      dragging: isDragging,
-    }"
-    :draggable="isTextItem ? true : false"
-    @click="handleClick"
-    @dblclick="handleDoubleClick"
-    @dragstart="handleTextDragStart"
-    @dragend="handleTextDragEnd"
-  >
-    <!-- TRANSPARENT SHIELD: Native drag for files (NOT text - text uses HTML5) -->
-    <div
-      v-if="canDragAsNativeFiles"
-      class="drag-shield"
-      @mousedown="handleMouseDown"
-    ></div>
-    <!-- Card Header -->
-    <div class="card-header" :class="`header-${item.content_type}`">
-      <div class="header-left">
-        <span class="type-badge" :class="`badge-${item.content_type}`">
-          <svg v-if="item.content_type === 'text'" class="badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <polyline points="14 2 14 8 20 8" />
-            <line x1="16" y1="13" x2="8" y2="13" />
-            <line x1="16" y1="17" x2="8" y2="17" />
-          </svg>
-          <svg v-else-if="item.content_type === 'image'" class="badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-            <circle cx="8.5" cy="8.5" r="1.5" />
-            <polyline points="21 15 16 10 5 21" />
-          </svg>
-          <svg v-else-if="item.content_type === 'files'" class="badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-          </svg>
-          <svg v-else-if="item.content_type === 'link'" class="badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-          </svg>
-          <svg v-else-if="item.content_type === 'audio'" class="badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M9 18V5l12-2v13" />
-            <circle cx="6" cy="18" r="3" />
-            <circle cx="18" cy="16" r="3" />
-          </svg>
-          <svg v-else-if="item.content_type === 'documents'" class="badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <polyline points="14 2 14 8 20 8" />
-            <line x1="16" y1="13" x2="8" y2="13" />
-            <line x1="16" y1="17" x2="8" y2="17" />
-            <line x1="10" y1="9" x2="8" y2="9" />
-          </svg>
-          <svg v-else class="badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10" />
-            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-            <line x1="12" y1="17" x2="12.01" y2="17" />
-          </svg>
-        </span>
-        <span class="header-label">{{ headerLabel }}</span>
-      </div>
-      <div class="header-right">
-        <span class="timestamp">{{ formattedTime }}</span>
-        <img
-          v-if="item.source_app_icon"
-          :src="`data:image/png;base64,${item.source_app_icon}`"
-          :alt="item.source_app || 'Source'"
-          :title="item.source_app || 'Source app'"
-          class="source-icon"
-        />
-        <span v-else class="source-icon-placeholder" :title="item.source_app || 'Unknown'">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-            <line x1="3" y1="9" x2="21" y2="9" />
-            <line x1="9" y1="21" x2="9" y2="9" />
-          </svg>
-        </span>
-      </div>
     </div>
 
-    <!-- Card Content -->
-    <div class="card-content">
-      <!-- Text Content -->
+    <div v-else class="card-content">
+      <!-- Text -->
       <div v-if="item.content_type === 'text'" class="text-content">
         <p class="text-preview">{{ textPreview }}</p>
       </div>
 
       <!-- Image without preview -->
-      <div v-else-if="item.content_type === 'image'" class="image-content">
-        <div class="thumbnail-placeholder">
-          <span>No preview</span>
-        </div>
+      <div v-else-if="item.content_type === 'image'" class="placeholder-content">
+        <span class="placeholder-text">No preview</span>
       </div>
 
       <!-- Files without preview -->
-      <div v-else-if="item.content_type === 'files'" class="files-content">
-        <div class="file-icon">
+      <div v-else-if="item.content_type === 'files'" class="icon-content">
+        <div class="content-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
             <polyline points="14 2 14 8 20 8" />
           </svg>
         </div>
-        <p class="file-count">{{ fileInfo.count }} file{{ fileInfo.count !== 1 ? 's' : '' }}</p>
-        <p v-if="fileInfo.names.length > 0" class="file-name">{{ fileInfo.names[0] }}</p>
+        <p class="content-label">{{ fileInfo.count }} file{{ fileInfo.count !== 1 ? 's' : '' }}</p>
+        <p v-if="fileInfo.names.length > 0" class="content-sublabel">{{ fileInfo.names[0] }}</p>
       </div>
 
-      <!-- Link Content -->
-      <div v-else-if="item.content_type === 'link'" class="link-content">
-        <div class="link-icon">
+      <!-- Link -->
+      <div v-else-if="item.content_type === 'link'" class="icon-content">
+        <div class="content-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10" />
             <line x1="2" y1="12" x2="22" y2="12" />
             <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
           </svg>
         </div>
-        <p class="link-domain">{{ urlPreview }}</p>
-        <p class="link-url">{{ item.content_text }}</p>
+        <p class="content-label">{{ urlPreview }}</p>
+        <p class="content-sublabel">{{ item.content_text }}</p>
       </div>
 
-      <!-- Audio Content -->
-      <div v-else-if="item.content_type === 'audio'" class="audio-content">
-        <div class="audio-icon">
+      <!-- Audio -->
+      <div v-else-if="item.content_type === 'audio'" class="icon-content">
+        <div class="content-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M9 18V5l12-2v13" />
             <circle cx="6" cy="18" r="3" />
             <circle cx="18" cy="16" r="3" />
           </svg>
         </div>
-        <p class="audio-count">{{ audioInfo.count }} audio{{ audioInfo.count !== 1 ? ' files' : '' }}</p>
-        <p v-if="audioInfo.names.length > 0" class="audio-name">{{ audioInfo.names[0] }}</p>
+        <p class="content-label">{{ audioInfo.count }} audio{{ audioInfo.count !== 1 ? ' files' : '' }}</p>
+        <p v-if="audioInfo.names.length > 0" class="content-sublabel">{{ audioInfo.names[0] }}</p>
       </div>
 
-      <!-- Documents Content (PDF, Word, Excel, etc.) -->
-      <div v-else-if="item.content_type === 'documents'" class="documents-content">
-        <div class="documents-icon">
+      <!-- Documents -->
+      <div v-else-if="item.content_type === 'documents'" class="icon-content">
+        <div class="content-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
             <polyline points="14 2 14 8 20 8" />
@@ -927,63 +862,69 @@ const cleanupDrag = () => {
             <line x1="10" y1="9" x2="8" y2="9" />
           </svg>
         </div>
-        <p class="documents-count">{{ documentInfo.count }} document{{ documentInfo.count !== 1 ? 's' : '' }}</p>
-        <p v-if="documentInfo.names.length > 0" class="documents-name">{{ documentInfo.names[0] }}</p>
+        <p class="content-label">{{ documentInfo.count }} document{{ documentInfo.count !== 1 ? 's' : '' }}</p>
+        <p v-if="documentInfo.names.length > 0" class="content-sublabel">{{ documentInfo.names[0] }}</p>
       </div>
+    </div>
 
-      <!-- Delete button overlay -->
-      <button class="visual-delete" @click="handleDelete" title="Delete">×</button>
+    <!-- Footer: glass type pill (left) · glass meta pill (right) -->
+    <div class="card-footer">
+      <span class="glass-pill type-pill">
+        <span class="type-dot"></span>
+        {{ fileExtension }}
+      </span>
+      <span class="glass-pill footer-meta">
+        <span class="footer-time">{{ formattedTime }}</span>
+        <img
+          v-if="item.source_app_icon"
+          :src="`data:image/png;base64,${item.source_app_icon}`"
+          :alt="item.source_app || 'Source'"
+          :title="item.source_app || 'Source app'"
+          class="footer-app-icon"
+        />
+        <span v-else class="footer-app-placeholder" :title="item.source_app || 'Unknown'">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+            <line x1="3" y1="9" x2="21" y2="9" />
+            <line x1="9" y1="21" x2="9" y2="9" />
+          </svg>
+        </span>
+      </span>
     </div>
   </div>
 </template>
 
 <style scoped>
+/* ============================================================================
+   GLASSMORPHISM CARD
+   ============================================================================ */
+
 .clipboard-card {
+  --type-rgb: 107, 114, 128;
+
   flex-shrink: 0;
   height: 100%;
   aspect-ratio: 1 / 1;
   min-width: 0;
-  background: white;
-  border-radius: 10px;
-  border: 2px solid transparent;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  border-radius: 16px;
   display: flex;
   flex-direction: column;
   cursor: grab;
-  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
   overflow: hidden;
   position: relative;
-  /* Prevent text selection and image dragging */
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+
+  /* Glass surface */
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
 }
 
-/**
- * TRANSPARENT SHIELD PATTERN
- * This invisible overlay captures all drag events before they reach
- * internal text/image elements, preventing unwanted selection.
- * The shield sits on top of content but below interactive elements (delete button).
- */
-.drag-shield {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 1; /* Above content, below delete button (z-index: 2) */
-  cursor: grab;
-  /* Completely transparent - no visual change */
-  background: transparent;
-  /* Shield must NOT block click events for underlying card */
-  /* But MUST capture drag events - this is the key trick */
-}
-
-.drag-shield:active {
-  cursor: grabbing;
-}
-
-/* Prevent text selection on all child elements */
 .clipboard-card * {
   user-select: none;
   -webkit-user-select: none;
@@ -996,12 +937,14 @@ const cleanupDrag = () => {
 
 .clipboard-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
 }
 
 .clipboard-card.selected {
-  border-color: #3b82f6;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+  border-color: rgba(var(--type-rgb), 0.5);
+  box-shadow:
+    0 4px 30px rgba(0, 0, 0, 0.1),
+    0 0 0 1px rgba(var(--type-rgb), 0.3);
 }
 
 .clipboard-card.dragging {
@@ -1010,16 +953,247 @@ const cleanupDrag = () => {
   cursor: grabbing;
 }
 
-/* Visual Preview Card */
+/* ============================================================================
+   GLASS PILL — shared frosted-glass style for all pills/bubbles
+   ============================================================================ */
+
+.glass-pill {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 10px;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+/* ============================================================================
+   DRAG SHIELD
+   ============================================================================ */
+
+.drag-shield {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  cursor: grab;
+  background: transparent;
+}
+
+.drag-shield:active {
+  cursor: grabbing;
+}
+
+/* ============================================================================
+   HEADER — glass title pill (left) + glass delete pill (right, on hover)
+   ============================================================================ */
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 8px 4px;
+  flex-shrink: 0;
+  z-index: 2;
+  position: relative;
+}
+
+.header-label {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #1f2937;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ============================================================================
+   DELETE BUTTON — inline in header, revealed on hover
+   ============================================================================ */
+
+.delete-btn {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: rgba(239, 68, 68, 0.75);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  color: white;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow:
+    0 1px 3px rgba(239, 68, 68, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  z-index: 3;
+
+  /* Hidden by default: slide in from right */
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  margin-left: -4px;
+  transition: max-width 0.2s ease, opacity 0.15s ease, margin-left 0.2s ease, transform 0.1s ease;
+}
+
+.clipboard-card:hover .delete-btn {
+  max-width: 22px;
+  opacity: 1;
+  margin-left: 0;
+}
+
+.delete-btn:hover {
+  background: rgba(220, 38, 38, 0.9);
+  transform: scale(1.1);
+}
+
+/* ============================================================================
+   FOOTER — [type pill] ··· [time + app icon]
+   ============================================================================ */
+
+.card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px 7px;
+  flex-shrink: 0;
+  gap: 4px;
+  z-index: 2;
+  position: relative;
+}
+
+.type-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px 2px 5px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: rgb(var(--type-rgb));
+}
+
+.type-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: rgb(var(--type-rgb));
+}
+
+.footer-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 5px 2px 7px;
+  flex-shrink: 0;
+}
+
+.footer-time {
+  font-size: 10px;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
+}
+
+.footer-app-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  object-fit: contain;
+}
+
+.footer-app-placeholder {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(0, 0, 0, 0.25);
+}
+
+.footer-app-placeholder svg {
+  width: 11px;
+  height: 11px;
+}
+
+/* ============================================================================
+   VISUAL CARD — image fills the card, header/footer float with glass pills
+   ============================================================================ */
+
 .visual-card {
-  /* Uses same structure as standard card */
+  position: relative;
+}
+
+.visual-card .card-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  padding: 7px 8px 0;
+}
+
+.visual-card .card-footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  padding: 0 8px 7px;
+}
+
+/* Visual card pills get darker glass for contrast on images */
+.visual-card .glass-pill {
+  background: rgba(0, 0, 0, 0.45);
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.visual-card .header-label {
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.visual-card .delete-btn {
+  background: rgba(239, 68, 68, 0.8);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.visual-card .type-pill {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.visual-card .type-dot {
+  background: rgb(var(--type-rgb));
+}
+
+.visual-card .footer-time {
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.visual-card .footer-app-placeholder {
+  color: rgba(255, 255, 255, 0.45);
 }
 
 .visual-content {
-  flex: 1;
-  position: relative;
+  position: absolute;
+  inset: 0;
   overflow: hidden;
-  min-height: 0;
+  border-radius: 16px;
 }
 
 .visual-preview {
@@ -1030,203 +1204,29 @@ const cleanupDrag = () => {
 
 .visual-badge {
   position: absolute;
-  bottom: 8px;
+  bottom: 32px;
   right: 8px;
-  padding: 4px 10px;
-  background: rgba(0, 0, 0, 0.75);
+  padding: 2px 7px;
   color: white;
-  border-radius: 12px;
-  font-size: 11px;
-  font-weight: 600;
-  backdrop-filter: blur(4px);
-}
-
-/* Delete button - same style for all cards */
-/* z-index: 2 to appear ABOVE the drag-shield (z-index: 1) */
-.visual-delete {
-  position: absolute;
-  bottom: 8px;
-  right: 8px;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: none;
-  border-radius: 8px;
-  background: rgba(239, 68, 68, 0.85);
-  color: white;
-  cursor: pointer;
-  font-size: 16px;
-  font-weight: 500;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transition: opacity 0.15s, background-color 0.15s, transform 0.15s;
-  backdrop-filter: blur(4px);
-  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
-  z-index: 2; /* Above drag-shield */
-}
-
-.clipboard-card:hover .visual-delete,
-.visual-card:hover .visual-delete {
-  opacity: 1;
-}
-
-.visual-delete:hover {
-  background: rgba(220, 38, 38, 1);
-  transform: scale(1.1);
-  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
-}
-
-/* Card Header */
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 6px 10px;
-  flex-shrink: 0;
-  border-radius: 10px 10px 0 0;
-  overflow: hidden;
-  max-width: 100%;
-}
-
-/* Header color themes */
-.header-text {
-  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
-}
-
-.header-image {
-  background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%);
-}
-
-.header-files {
-  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
-}
-
-.header-link {
-  background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
-}
-
-.header-audio {
-  background: linear-gradient(135deg, #fdf2f8 0%, #fce7f3 100%);
-}
-
-.header-documents {
-  background: linear-gradient(135deg, #ecfeff 0%, #cffafe 100%);
-}
-
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-}
-
-.type-badge {
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.badge-icon {
-  width: 12px;
-  height: 12px;
-}
-
-.badge-text {
-  background: #3b82f6;
-  color: white;
-}
-
-.badge-image {
-  background: #8b5cf6;
-  color: white;
-}
-
-.badge-files {
-  background: #22c55e;
-  color: white;
-}
-
-.badge-link {
-  background: #f97316;
-  color: white;
-}
-
-.badge-audio {
-  background: #ec4899;
-  color: white;
-}
-
-.badge-documents {
-  background: #0891b2;
-  color: white;
-}
-
-.header-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: #374151;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  overflow: hidden;
-}
-
-.timestamp {
   font-size: 10px;
-  color: #9ca3af;
+  font-weight: 600;
+  z-index: 2;
 }
 
-.source-icon {
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  object-fit: contain;
-  background: white;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
+/* ============================================================================
+   CARD CONTENT — standard (non-visual) cards
+   ============================================================================ */
 
-.source-icon-placeholder {
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.05);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #9ca3af;
-}
-
-.source-icon-placeholder svg {
-  width: 10px;
-  height: 14px;
-}
-
-/* Card Content */
 .card-content {
   flex: 1;
-  padding: 6px 10px;
+  padding: 4px 10px 10px;
   overflow: hidden;
   min-height: 0;
   position: relative;
+  z-index: 1;
 }
 
-/* Text Content */
+/* Text */
 .text-content {
   height: 100%;
   overflow: hidden;
@@ -1235,6 +1235,7 @@ const cleanupDrag = () => {
 .text-preview {
   margin: 0;
   font-size: 11px;
+  font-weight: 500;
   line-height: 1.4;
   color: #374151;
   word-break: break-word;
@@ -1244,57 +1245,49 @@ const cleanupDrag = () => {
   overflow: hidden;
 }
 
-/* Image Content */
-.image-content {
+/* Placeholder */
+.placeholder-content {
   height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  position: relative;
 }
 
-.thumbnail-placeholder {
-  width: 80px;
-  height: 60px;
-  background: #f3f4f6;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.placeholder-text {
   font-size: 10px;
   color: #9ca3af;
 }
 
-/* Files Content */
-.files-content {
+/* Icon-based content (files, link, audio, documents) */
+.icon-content {
   height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  position: relative;
+  gap: 6px;
 }
 
-.file-icon {
-  width: 32px;
-  height: 32px;
-  color: #6b7280;
+.content-icon {
+  width: 40px;
+  height: 40px;
+  color: rgb(var(--type-rgb));
+  opacity: 0.7;
 }
 
-.file-icon svg {
+.content-icon svg {
   width: 100%;
   height: 100%;
 }
 
-.file-count {
+.content-label {
   margin: 0;
   font-size: 12px;
   font-weight: 500;
   color: #374151;
 }
 
-.file-name {
+.content-sublabel {
   margin: 0;
   font-size: 10px;
   color: #6b7280;
@@ -1304,199 +1297,72 @@ const cleanupDrag = () => {
   white-space: nowrap;
 }
 
-/* Link Content */
-.link-content {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-}
+/* ============================================================================
+   DARK MODE
+   ============================================================================ */
 
-.link-icon {
-  width: 28px;
-  height: 28px;
-  color: #ea580c;
-}
-
-.link-icon svg {
-  width: 100%;
-  height: 100%;
-}
-
-.link-domain {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: #ea580c;
-}
-
-.link-url {
-  margin: 0;
-  font-size: 10px;
-  color: #9ca3af;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 0 8px;
-}
-
-/* Audio Content */
-.audio-content {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-}
-
-.audio-icon {
-  width: 32px;
-  height: 32px;
-  color: #db2777;
-}
-
-.audio-icon svg {
-  width: 100%;
-  height: 100%;
-}
-
-.audio-count {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 500;
-  color: #374151;
-}
-
-.audio-name {
-  margin: 0;
-  font-size: 10px;
-  color: #6b7280;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Documents Content */
-.documents-content {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-}
-
-.documents-icon {
-  width: 32px;
-  height: 32px;
-  color: #0891b2;
-}
-
-.documents-icon svg {
-  width: 100%;
-  height: 100%;
-}
-
-.documents-count {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 500;
-  color: #374151;
-}
-
-.documents-name {
-  margin: 0;
-  font-size: 10px;
-  color: #6b7280;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Dark mode */
 @media (prefers-color-scheme: dark) {
   .clipboard-card {
-    background: #1f2937;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+  }
+
+  .clipboard-card:hover {
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   }
 
   .clipboard-card.selected {
-    border-color: #60a5fa;
+    border-color: rgba(var(--type-rgb), 0.5);
+    box-shadow:
+      0 4px 30px rgba(0, 0, 0, 0.3),
+      0 0 0 1px rgba(var(--type-rgb), 0.3);
   }
 
-  .header-text {
-    background: linear-gradient(135deg, #1e3a5f 0%, #1e40af20 100%);
-  }
-
-  .header-image {
-    background: linear-gradient(135deg, #3b1f5f 0%, #6d28d920 100%);
-  }
-
-  .header-files {
-    background: linear-gradient(135deg, #14532d 0%, #16a34a20 100%);
-  }
-
-  .header-link {
-    background: linear-gradient(135deg, #7c2d12 0%, #ea580c20 100%);
-  }
-
-  .header-audio {
-    background: linear-gradient(135deg, #831843 0%, #db277720 100%);
-  }
-
-  .header-documents {
-    background: linear-gradient(135deg, #164e63 0%, #0891b220 100%);
+  /* Dark glass pills */
+  .glass-pill {
+    background: rgba(0, 0, 0, 0.35);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow:
+      0 1px 3px rgba(0, 0, 0, 0.15),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
 
   .header-label {
-    color: #e5e7eb;
+    color: rgba(255, 255, 255, 0.9);
   }
 
-  .source-icon {
-    background: #374151;
+  .type-pill {
+    color: rgb(var(--type-rgb));
   }
 
-  .source-icon-placeholder {
-    background: rgba(255, 255, 255, 0.1);
-    color: #6b7280;
+  .footer-time {
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .footer-app-placeholder {
+    color: rgba(255, 255, 255, 0.3);
   }
 
   .text-preview {
-    color: #e5e7eb;
+    color: rgba(255, 255, 255, 0.8);
   }
 
-  .thumbnail-placeholder {
-    background: #374151;
+  .placeholder-text {
+    color: rgba(255, 255, 255, 0.3);
   }
 
-  .file-count,
-  .audio-count,
-  .documents-count {
-    color: #e5e7eb;
+  .content-icon {
+    color: rgb(var(--type-rgb));
+    opacity: 0.8;
   }
 
-  .file-name,
-  .audio-name,
-  .documents-name {
-    color: #9ca3af;
+  .content-label {
+    color: rgba(255, 255, 255, 0.85);
   }
 
-  .documents-icon {
-    color: #22d3ee;
-  }
-
-  .link-domain {
-    color: #fb923c;
-  }
-
-  .link-url {
-    color: #6b7280;
+  .content-sublabel {
+    color: rgba(255, 255, 255, 0.4);
   }
 }
 </style>

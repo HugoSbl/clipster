@@ -195,13 +195,29 @@ body,
   width: 100%;
   display: flex;
   flex-direction: column;
-  background: rgba(250, 248, 245, 0.92);
+  /* Mesh gradient background for glassmorphism */
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(120, 119, 198, 0.15) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(255, 119, 168, 0.12) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 80%, rgba(99, 179, 237, 0.12) 0%, transparent 50%),
+    rgba(250, 248, 245, 0.92);
   backdrop-filter: blur(24px) saturate(180%);
   -webkit-backdrop-filter: blur(24px) saturate(180%);
   border-top: 1px solid rgba(0, 0, 0, 0.08);
   transform: translateY(0);
   transition: transform 0.28s cubic-bezier(0.4, 0, 0.6, 1);
   overflow: hidden;
+}
+
+@media (prefers-color-scheme: dark) {
+  .app-container {
+    background:
+      radial-gradient(ellipse at 20% 50%, rgba(120, 119, 198, 0.12) 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 20%, rgba(255, 119, 168, 0.08) 0%, transparent 50%),
+      radial-gradient(ellipse at 50% 80%, rgba(99, 179, 237, 0.08) 0%, transparent 50%),
+      rgba(15, 15, 20, 0.94);
+    border-top-color: rgba(255, 255, 255, 0.06);
+  }
 }
 
 .top-bar {

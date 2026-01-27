@@ -342,7 +342,7 @@ const handleCardClick = (item: ClipboardItem) => {
 /* Timeline Track */
 .timeline-track {
   display: flex;
-  gap: 10px;
+  gap: 14px;
   height: 100%;
   min-width: max-content;
   align-items: stretch;
