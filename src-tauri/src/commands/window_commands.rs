@@ -4,92 +4,76 @@ use tauri::{AppHandle, Manager};
 /// Called every time the window is shown so it follows the user across screens.
 #[cfg(target_os = "macos")]
 pub fn reposition_to_cursor_monitor(window: &tauri::WebviewWindow) {
-    use objc2::encode::{Encode, Encoding};
-
-    // Minimal Cocoa geometry types for msg_send — must implement Encode
+    // Use CoreGraphics C functions directly — avoids objc2 msg_send Encode issues
     #[repr(C)]
     #[derive(Copy, Clone)]
     struct CGPoint {
         x: f64,
         y: f64,
     }
-    unsafe impl Encode for CGPoint {
-        const ENCODING: Encoding =
-            Encoding::Struct("CGPoint", &[Encoding::Double, Encoding::Double]);
-    }
-
     #[repr(C)]
     #[derive(Copy, Clone)]
     struct CGSize {
         width: f64,
         height: f64,
     }
-    unsafe impl Encode for CGSize {
-        const ENCODING: Encoding =
-            Encoding::Struct("CGSize", &[Encoding::Double, Encoding::Double]);
-    }
-
     #[repr(C)]
     #[derive(Copy, Clone)]
     struct CGRect {
         origin: CGPoint,
         size: CGSize,
     }
-    unsafe impl Encode for CGRect {
-        const ENCODING: Encoding = Encoding::Struct(
-            "CGRect",
-            &[
-                Encoding::Struct("CGPoint", &[Encoding::Double, Encoding::Double]),
-                Encoding::Struct("CGSize", &[Encoding::Double, Encoding::Double]),
-            ],
-        );
+
+    type CGDirectDisplayID = u32;
+
+    extern "C" {
+        fn CGEventCreate(source: *const std::ffi::c_void) -> *const std::ffi::c_void;
+        fn CGEventGetLocation(event: *const std::ffi::c_void) -> CGPoint;
+        fn CFRelease(cf: *const std::ffi::c_void);
+        fn CGGetActiveDisplayList(
+            max: u32,
+            displays: *mut CGDirectDisplayID,
+            count: *mut u32,
+        ) -> i32;
+        fn CGDisplayBounds(display: CGDirectDisplayID) -> CGRect;
     }
 
     unsafe {
-        use objc2::msg_send;
-        use objc2::runtime::{AnyClass, AnyObject};
+        // Cursor position in global display coords (top-left origin)
+        let event = CGEventCreate(std::ptr::null());
+        if event.is_null() {
+            return;
+        }
+        let cursor = CGEventGetLocation(event);
+        CFRelease(event);
 
-        // [NSEvent mouseLocation] — cursor position in Cocoa coords (bottom-left origin)
-        let event_class = match AnyClass::get("NSEvent") {
-            Some(c) => c,
-            None => return,
-        };
-        let cursor: CGPoint = msg_send![event_class, mouseLocation];
-
-        // [NSScreen screens] — ordered list, index 0 = primary
-        let screen_class = match AnyClass::get("NSScreen") {
-            Some(c) => c,
-            None => return,
-        };
-        let screens: *const AnyObject = msg_send![screen_class, screens];
-        let count: usize = msg_send![screens, count];
-        if count == 0 {
+        // Enumerate active displays
+        let mut display_count: u32 = 0;
+        if CGGetActiveDisplayList(0, std::ptr::null_mut(), &mut display_count) != 0
+            || display_count == 0
+        {
+            return;
+        }
+        let mut displays = vec![0u32; display_count as usize];
+        if CGGetActiveDisplayList(display_count, displays.as_mut_ptr(), &mut display_count) != 0 {
             return;
         }
 
-        // Primary screen height for Cocoa→Tauri coordinate conversion
-        let primary: *const AnyObject = msg_send![screens, objectAtIndex: 0_usize];
-        let primary_frame: CGRect = msg_send![primary, frame];
-        let primary_h = primary_frame.size.height;
+        // Find display containing cursor
+        for &display_id in &displays {
+            let bounds = CGDisplayBounds(display_id);
 
-        for i in 0..count {
-            let screen: *const AnyObject = msg_send![screens, objectAtIndex: i];
-            let frame: CGRect = msg_send![screen, frame];
-
-            // Check if cursor is on this screen
-            if cursor.x >= frame.origin.x
-                && cursor.x < frame.origin.x + frame.size.width
-                && cursor.y >= frame.origin.y
-                && cursor.y < frame.origin.y + frame.size.height
+            if cursor.x >= bounds.origin.x
+                && cursor.x < bounds.origin.x + bounds.size.width
+                && cursor.y >= bounds.origin.y
+                && cursor.y < bounds.origin.y + bounds.size.height
             {
-                let win_h = frame.size.height * 0.33;
-                // Cocoa y (bottom-left) → Tauri y (top-left):
-                // window bottom = screen bottom → tauri_y = primary_h - screen.origin.y - win_h
-                let tauri_y = primary_h - frame.origin.y - win_h;
+                let win_h = bounds.size.height * 0.33;
+                // Global display coords use top-left origin, same as Tauri
+                let win_y = bounds.origin.y + bounds.size.height - win_h;
 
-                let _ = window.set_size(tauri::LogicalSize::new(frame.size.width, win_h));
-                let _ =
-                    window.set_position(tauri::LogicalPosition::new(frame.origin.x, tauri_y));
+                let _ = window.set_size(tauri::LogicalSize::new(bounds.size.width, win_h));
+                let _ = window.set_position(tauri::LogicalPosition::new(bounds.origin.x, win_y));
                 return;
             }
         }
