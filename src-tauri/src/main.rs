@@ -20,7 +20,8 @@ use commands::settings_commands::{
     get_history_limit, get_settings, set_history_limit, update_setting,
 };
 use commands::window_commands::{
-    ensure_overlay, hide_window, quit_app, reposition_to_cursor_monitor, show_window,
+    hide_panel, hide_window, quit_app, reposition_to_cursor_monitor, setup_window_behavior,
+    show_panel, show_window,
 };
 use std::sync::Arc;
 use storage::Database;
@@ -40,13 +41,11 @@ pub struct AppState {
 fn toggle_window_visibility(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
-            let _ = window.hide();
+            hide_panel(&window);
             println!("Window hidden");
         } else {
             reposition_to_cursor_monitor(&window);
-            let _ = window.show();
-            let _ = window.set_focus();
-            ensure_overlay(&window);
+            show_panel(&window);
             println!("Window shown and focused");
         }
     }
@@ -119,9 +118,7 @@ fn main() {
                         println!("Settings clicked");
                         if let Some(window) = app.get_webview_window("main") {
                             reposition_to_cursor_monitor(&window);
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                            ensure_overlay(&window);
+                            show_panel(&window);
                             let _ = window.emit("open-settings", ());
                         }
                     }
@@ -135,8 +132,11 @@ fn main() {
 
             println!("System tray created");
 
-            // Configure window size and position on the cursor's monitor
+            // Configure window for Accessory-app overlay behaviour
             if let Some(window) = app.get_webview_window("main") {
+                // Set activation policy to Accessory + window level/behavior (once)
+                setup_window_behavior(&window);
+
                 reposition_to_cursor_monitor(&window);
 
                 // Apply vibrancy effect on macOS
@@ -147,9 +147,8 @@ fn main() {
                     println!("Applied vibrancy effect");
                 }
 
-                // Show window and apply overlay properties (level, collection behavior)
-                let _ = window.show();
-                ensure_overlay(&window);
+                // Show the panel via native APIs (no Space switch)
+                show_panel(&window);
             }
 
             Ok(())

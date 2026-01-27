@@ -1,5 +1,38 @@
 use tauri::{AppHandle, Manager};
 
+// ── macOS native helpers ──────────────────────────────────────────────────────
+
+#[cfg(target_os = "macos")]
+use objc2::msg_send;
+#[cfg(target_os = "macos")]
+use objc2::runtime::{AnyClass, AnyObject};
+
+/// Link to the Objective-C runtime for isa-swizzling (`object_setClass`).
+#[cfg(target_os = "macos")]
+#[link(name = "objc", kind = "dylib")]
+extern "C" {
+    fn object_setClass(
+        obj: *mut std::ffi::c_void,
+        cls: *const std::ffi::c_void,
+    ) -> *const std::ffi::c_void;
+    fn object_getClassName(obj: *const std::ffi::c_void) -> *const std::ffi::c_char;
+}
+
+/// Return the shared `NSApplication` instance.
+#[cfg(target_os = "macos")]
+unsafe fn ns_app() -> *mut AnyObject {
+    let cls = AnyClass::get("NSApplication").unwrap();
+    msg_send![cls, sharedApplication]
+}
+
+/// Return the raw `NSWindow` pointer behind a Tauri window.
+#[cfg(target_os = "macos")]
+fn ns_window_ptr(window: &tauri::WebviewWindow) -> Option<*mut AnyObject> {
+    window.ns_window().ok().map(|w| w as *mut AnyObject)
+}
+
+// ── Reposition to cursor monitor ──────────────────────────────────────────────
+
 /// Reposition the window to the bottom of the monitor where the cursor is.
 /// Called every time the window is shown so it follows the user across screens.
 #[cfg(target_os = "macos")]
@@ -121,50 +154,158 @@ pub fn reposition_to_cursor_monitor(window: &tauri::WebviewWindow) {
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn reposition_to_cursor_monitor(_window: &tauri::WebviewWindow) {}
 
-/// Ensure the window appears above everything, including fullscreen apps.
-/// Must be called every time the window is shown (macOS can reset these).
-pub fn ensure_overlay(window: &tauri::WebviewWindow) {
+// ── NSPanel runtime-swizzle pattern ───────────────────────────────────────────
+//
+// Standard NSWindow approaches (setLevel, setCollectionBehavior, etc.) all fail
+// to overlay fullscreen apps because macOS treats NSWindow and NSPanel
+// differently at the window-server level.  NSPanel with the
+// NonactivatingPanel style mask is the mechanism Spotlight/Raycast use.
+//
+// Since Tauri creates an NSWindow, we swap the isa pointer at runtime via
+// object_setClass(obj, [NSPanel class]) so the window server treats it as a
+// true panel.  Combined with LSUIElement (Info.plist) and the correct
+// collection behaviors, the panel appears over ANY app including fullscreen.
+//
+// CRITICAL: hide_panel must NOT call [NSApp hide:].  That destroys the
+// window's Space affinity and prevents it from reappearing over fullscreen
+// apps on the next show.
+
+/// One-time setup: swizzle the Tauri NSWindow into an NSPanel and apply
+/// the NonactivatingPanel style mask.
+///
+/// Call this once during `setup`, **before** the first `show_panel`.
+pub fn setup_window_behavior(window: &tauri::WebviewWindow) {
     #[cfg(target_os = "macos")]
     {
-        match window.ns_window() {
-            Ok(ns_window) => unsafe {
-                use objc2::msg_send;
-                use objc2::runtime::AnyObject;
-                let ns_win: *mut AnyObject = ns_window as *mut AnyObject;
+        let Some(ns_win) = ns_window_ptr(window) else {
+            eprintln!("setup_window_behavior: could not obtain NSWindow");
+            return;
+        };
+        unsafe {
+            // ── 1. Swizzle NSWindow → NSPanel ─────────────────────────────
+            let before = std::ffi::CStr::from_ptr(
+                object_getClassName(ns_win as *const std::ffi::c_void),
+            );
+            println!("setup_window_behavior: class BEFORE = {:?}", before);
 
-                // kCGScreenSaverWindowLevel (1000) — above fullscreen apps
-                let _: () = msg_send![ns_win, setLevel: 1000_i64];
+            let panel_cls =
+                AnyClass::get("NSPanel").expect("NSPanel class not found in ObjC runtime");
+            object_setClass(
+                ns_win as *mut std::ffi::c_void,
+                panel_cls as *const AnyClass as *const std::ffi::c_void,
+            );
 
-                // NSWindowCollectionBehaviorCanJoinAllSpaces  (1 << 0)  — all Spaces
-                // NSWindowCollectionBehaviorStationary        (1 << 4)  — stays during Mission Control
-                // NSWindowCollectionBehaviorIgnoresCycle      (1 << 6)  — skip Cmd+Tab
-                // NSWindowCollectionBehaviorFullScreenAuxiliary (1 << 8) — overlay fullscreen Spaces
-                let behavior: u64 = (1 << 0) | (1 << 4) | (1 << 6) | (1 << 8);
-                let _: () = msg_send![ns_win, setCollectionBehavior: behavior];
+            let after = std::ffi::CStr::from_ptr(
+                object_getClassName(ns_win as *const std::ffi::c_void),
+            );
+            println!("setup_window_behavior: class AFTER  = {:?}", after);
 
-                // Force the window to front regardless of app activation state
-                let _: () = msg_send![ns_win, orderFrontRegardless];
+            // ── 2. Style mask ─────────────────────────────────────────────
+            // Preserve existing bits (e.g. FullSizeContentView), strip
+            // Titled, add NonactivatingPanel + Resizable.
+            //   NSWindowStyleMaskTitled              = 1 << 0
+            //   NSWindowStyleMaskResizable           = 1 << 3
+            //   NSWindowStyleMaskNonactivatingPanel  = 1 << 7
+            let current_mask: u64 = msg_send![ns_win, styleMask];
+            let new_mask = (current_mask & !(1_u64))  // remove Titled
+                | (1_u64 << 7)                        // NonactivatingPanel
+                | (1_u64 << 3);                       // Resizable
+            let _: () = msg_send![ns_win, setStyleMask: new_mask];
+            println!(
+                "setup_window_behavior: styleMask 0x{:X} -> 0x{:X}",
+                current_mask, new_mask
+            );
 
-                println!("ensure_overlay: level=1000, behaviors={}, orderFrontRegardless", behavior);
-            },
-            Err(e) => {
-                eprintln!("ensure_overlay: ns_window() failed: {}", e);
-            }
+            // ── 3. Panel properties ───────────────────────────────────────
+            let _: () = msg_send![ns_win, setHidesOnDeactivate: false];
+            let _: () = msg_send![ns_win, setHasShadow: false];
+        }
+    }
+}
+
+/// Show the panel over any app (including fullscreen) and grab keyboard focus.
+///
+/// Re-applies collection behavior and level on EVERY show because orderOut
+/// can reset them.  Debug-prints the actual class + level after ordering
+/// front so you can verify the swizzle is intact.
+pub fn show_panel(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(ns_win) = ns_window_ptr(window) else {
+            eprintln!("show_panel: could not obtain NSWindow");
+            return;
+        };
+        unsafe {
+            let nil: *mut AnyObject = std::ptr::null_mut();
+
+            // ── 1. Collection behavior (force every show) ─────────────────
+            //   CanJoinAllSpaces       (1 << 0)
+            //   Stationary             (1 << 4)
+            //   IgnoresCycle           (1 << 6)
+            //   FullScreenAuxiliary    (1 << 8)
+            let behavior: u64 = (1 << 0) | (1 << 4) | (1 << 6) | (1 << 8);
+            let _: () = msg_send![ns_win, setCollectionBehavior: behavior];
+
+            // ── 2. Level: kCGStatusWindowLevel (25) ───────────────────────
+            let _: () = msg_send![ns_win, setLevel: 25_i64];
+
+            // ── 3. Show + accept keyboard ─────────────────────────────────
+            let _: () = msg_send![ns_win, makeKeyAndOrderFront: nil];
+
+            // ── 4. Activate for keyboard routing ──────────────────────────
+            let app = ns_app();
+            let _: () = msg_send![app, activateIgnoringOtherApps: true];
+
+            // ── Debug: verify swizzle + level stuck ───────────────────────
+            let actual_level: i64 = msg_send![ns_win, level];
+            let cls_name = std::ffi::CStr::from_ptr(
+                object_getClassName(ns_win as *const std::ffi::c_void),
+            );
+            println!(
+                "show_panel: class={:?} level={} behavior=0x{:X}",
+                cls_name, actual_level, behavior
+            );
         }
     }
 
     #[cfg(target_os = "windows")]
     {
-        // Re-assert topmost so it stays above fullscreen (borderless) apps
         let _ = window.set_always_on_top(true);
+        let _ = window.show();
+        let _ = window.set_focus();
     }
 }
+
+/// Hide the panel.  ONLY orderOut — do NOT call [NSApp hide:].
+///
+/// [NSApp hide:] destroys the window's Space affinity, preventing it from
+/// reappearing over fullscreen apps on the next show_panel call.
+pub fn hide_panel(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(ns_win) = ns_window_ptr(window) else {
+            eprintln!("hide_panel: could not obtain NSWindow");
+            return;
+        };
+        unsafe {
+            let nil: *mut AnyObject = std::ptr::null_mut();
+            let _: () = msg_send![ns_win, orderOut: nil];
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window.hide();
+    }
+}
+
+// ── Tauri IPC commands ────────────────────────────────────────────────────────
 
 /// Hide the main window
 #[tauri::command]
 pub fn hide_window(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
-        window.hide().map_err(|e| e.to_string())?;
+        hide_panel(&window);
     }
     Ok(())
 }
@@ -174,9 +315,7 @@ pub fn hide_window(app: AppHandle) -> Result<(), String> {
 pub fn show_window(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
         reposition_to_cursor_monitor(&window);
-        window.show().map_err(|e| e.to_string())?;
-        window.set_focus().map_err(|e| e.to_string())?;
-        ensure_overlay(&window);
+        show_panel(&window);
     }
     Ok(())
 }

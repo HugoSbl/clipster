@@ -19,10 +19,10 @@
         "decorations": false,
         "resizable": false,
         "transparent": true,
-        "alwaysOnTop": true,
         "visible": false,
         "skipTaskbar": true,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "alwaysOnTop":false
       }
     ],
     "security": {
