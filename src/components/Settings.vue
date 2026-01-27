@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
+import { invoke } from '@tauri-apps/api/core';
+import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart';
 import { useSettingsStore } from '@/stores/settings';
 import { useClipboardStore } from '@/stores/clipboard';
 import type { Theme } from '@/stores/settings';
@@ -17,12 +19,26 @@ const isOpen = computed(() => settingsStore.showModal);
 // Local state for theme
 const activeTheme = ref<Theme>('dark');
 
+// Local state for autostart
+const autoStart = ref(false);
+
 // Initialize local state when modal opens
 onMounted(async () => {
   await settingsStore.fetchSettings();
   historyLimit.value = settingsStore.historyLimit;
   startHidden.value = settingsStore.startHidden;
   activeTheme.value = settingsStore.theme;
+});
+
+// Refresh autostart state when modal opens
+watch(isOpen, async (open) => {
+  if (open) {
+    try {
+      autoStart.value = await isEnabled();
+    } catch {
+      autoStart.value = false;
+    }
+  }
 });
 
 // Close modal
@@ -47,6 +63,26 @@ const clearHistory = async () => {
     const deleted = await clipboardStore.clearHistory();
     alert(`Cleared ${deleted} items from history.`);
   }
+};
+
+// Toggle auto-launch
+const toggleAutoStart = async () => {
+  try {
+    if (autoStart.value) {
+      await disable();
+      autoStart.value = false;
+    } else {
+      await enable();
+      autoStart.value = true;
+    }
+  } catch (e) {
+    console.error('Failed to toggle autostart:', e);
+  }
+};
+
+// Quit application
+const quitApp = async () => {
+  await invoke('quit_app');
 };
 
 // Change theme
@@ -177,6 +213,20 @@ const handleKeydown = (e: KeyboardEvent) => {
               </div>
               <p class="setting-description">Start the app minimized to system tray</p>
             </div>
+
+            <div class="setting-item">
+              <label>Launch at Login</label>
+              <div class="setting-control">
+                <button
+                  class="toggle-btn"
+                  :class="{ active: autoStart }"
+                  @click="toggleAutoStart"
+                >
+                  {{ autoStart ? 'On' : 'Off' }}
+                </button>
+              </div>
+              <p class="setting-description">Automatically start Clipster when you log in</p>
+            </div>
           </section>
 
           <!-- Shortcut Section -->
@@ -204,6 +254,16 @@ const handleKeydown = (e: KeyboardEvent) => {
                 </button>
               </div>
               <p class="setting-description">Remove all items except favorites and pinned</p>
+            </div>
+
+            <div class="setting-item">
+              <label>Quit Application</label>
+              <div class="setting-control">
+                <button class="danger-btn" @click="quitApp">
+                  Quit Clipster
+                </button>
+              </div>
+              <p class="setting-description">Completely close the application</p>
             </div>
           </section>
         </div>

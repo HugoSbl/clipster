@@ -38,6 +38,8 @@ image = "0.24"
 arboard = "3.4"
 # Native drag & drop
 tauri-plugin-drag = "2.1.0"
+# Auto-launch at system startup
+tauri-plugin-autostart = "2"
 
 # Windows-specific dependencies
 [target.'cfg(target_os = "windows")'.dependencies]

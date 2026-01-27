@@ -18,3 +18,10 @@ pub fn show_window(app: AppHandle) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Quit the application
+#[tauri::command]
+pub fn quit_app(app: AppHandle) -> Result<(), String> {
+    app.exit(0);
+    Ok(())
+}

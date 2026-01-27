@@ -19,7 +19,7 @@ use commands::pinboard_commands::{
 use commands::settings_commands::{
     get_history_limit, get_settings, set_history_limit, update_setting,
 };
-use commands::window_commands::{hide_window, show_window};
+use commands::window_commands::{hide_window, quit_app, show_window};
 use std::sync::Arc;
 use storage::Database;
 use tauri::menu::{Menu, MenuItem};
@@ -27,6 +27,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 use clipboard::clipboard_monitor;
+use tauri_plugin_autostart::MacosLauncher;
 
 /// Application state holding the database connection
 pub struct AppState {
@@ -59,6 +60,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_drag::init())
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut_pressed, _event| {
@@ -228,6 +230,7 @@ fn main() {
             // Window commands
             hide_window,
             show_window,
+            quit_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
