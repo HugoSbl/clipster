@@ -3,11 +3,15 @@ use tauri::{AppHandle, Manager};
 // ── macOS native helpers ──────────────────────────────────────────────────────
 
 #[cfg(target_os = "macos")]
+use std::sync::Once;
+#[cfg(target_os = "macos")]
 use objc2::msg_send;
 #[cfg(target_os = "macos")]
 use objc2::runtime::{AnyClass, AnyObject};
+#[cfg(target_os = "macos")]
+use objc2_foundation::{CGPoint, CGRect, CGSize};
 
-/// Link to the Objective-C runtime for isa-swizzling (`object_setClass`).
+/// Link to the Objective-C runtime.
 #[cfg(target_os = "macos")]
 #[link(name = "objc", kind = "dylib")]
 extern "C" {
@@ -16,6 +20,79 @@ extern "C" {
         cls: *const std::ffi::c_void,
     ) -> *const std::ffi::c_void;
     fn object_getClassName(obj: *const std::ffi::c_void) -> *const std::ffi::c_char;
+    fn objc_allocateClassPair(
+        superclass: *const std::ffi::c_void,
+        name: *const std::ffi::c_char,
+        extra_bytes: usize,
+    ) -> *mut std::ffi::c_void;
+    fn objc_registerClassPair(cls: *mut std::ffi::c_void);
+    fn class_addMethod(
+        cls: *mut std::ffi::c_void,
+        sel: *const std::ffi::c_void,
+        imp: *const std::ffi::c_void,
+        types: *const std::ffi::c_char,
+    ) -> bool;
+    fn sel_registerName(name: *const std::ffi::c_char) -> *const std::ffi::c_void;
+}
+
+// ── SpotlightPanel: NSPanel subclass with canBecomeKeyWindow = YES ───────────
+//
+// A borderless NSPanel with NonactivatingPanel defaults canBecomeKeyWindow to
+// NO.  WebKit interprets this as "background window" and suppresses mouse
+// tracking (hover, cursor changes).  We define a runtime subclass that
+// overrides canBecomeKeyWindow → YES so WebKit treats it as fully interactive.
+//
+// Uses raw ObjC runtime C API to avoid objc2 version conflicts (Tauri pulls
+// a different objc2 version internally, making ClassBuilder::add_method fail
+// with MethodImplementation trait mismatch).
+
+#[cfg(target_os = "macos")]
+static REGISTER_SPOTLIGHT_PANEL: Once = Once::new();
+
+/// IMP for -[SpotlightPanel canBecomeKeyWindow] → YES
+#[cfg(target_os = "macos")]
+extern "C" fn spotlight_panel_can_become_key(
+    _self: *mut std::ffi::c_void,
+    _cmd: *mut std::ffi::c_void,
+) -> bool {
+    true
+}
+
+/// Register the `SpotlightPanel` ObjC class (once).  Must be called before
+/// the first `object_setClass` that uses it.
+#[cfg(target_os = "macos")]
+fn register_spotlight_panel_class() {
+    REGISTER_SPOTLIGHT_PANEL.call_once(|| {
+        unsafe {
+            let superclass = AnyClass::get("NSPanel").expect("NSPanel class not found");
+
+            let cls = objc_allocateClassPair(
+                superclass as *const AnyClass as *const std::ffi::c_void,
+                b"SpotlightPanel\0".as_ptr() as *const std::ffi::c_char,
+                0,
+            );
+            assert!(!cls.is_null(), "Failed to allocate SpotlightPanel class");
+
+            let sel = sel_registerName(
+                b"canBecomeKeyWindow\0".as_ptr() as *const std::ffi::c_char,
+            );
+            // Type encoding: returns BOOL (B on arm64, c on x86_64), self (@), _cmd (:)
+            #[cfg(target_arch = "aarch64")]
+            let types = b"B@:\0";
+            #[cfg(target_arch = "x86_64")]
+            let types = b"c@:\0";
+
+            class_addMethod(
+                cls,
+                sel,
+                spotlight_panel_can_become_key as *const std::ffi::c_void,
+                types.as_ptr() as *const std::ffi::c_char,
+            );
+
+            objc_registerClassPair(cls);
+            println!("register_spotlight_panel_class: registered SpotlightPanel");
+        }
+    });
 }
 
 /// Return the shared `NSApplication` instance.
@@ -169,6 +246,75 @@ pub fn reposition_to_cursor_monitor(_window: &tauri::WebviewWindow) {}
 // CRITICAL: hide_panel must NOT call [NSApp hide:].  That destroys the
 // window's Space affinity and prevents it from reappearing over fullscreen
 // apps on the next show.
+//
+// NonactivatingPanel suppresses mouse tracking (hover, cursor changes) by
+// default.  We fix this by injecting NSTrackingAreas with ActiveAlways +
+// CursorUpdate on every view in the hierarchy (the WKWebView is nested
+// several levels deep).
+
+// ── Recursive NSTrackingArea injection ────────────────────────────────────────
+
+/// Attach an `NSTrackingArea` to `view` and recurse into all its subviews.
+/// Returns the total number of views patched.
+#[cfg(target_os = "macos")]
+unsafe fn apply_tracking_recursive(view: *mut AnyObject) -> usize {
+    if view.is_null() {
+        return 0;
+    }
+
+    let mut count = 0;
+
+    // ── Attach a tracking area to this view ──────────────────────────────
+    add_tracking_area_to_view(view);
+    count += 1;
+
+    let cls_name =
+        std::ffi::CStr::from_ptr(object_getClassName(view as *const std::ffi::c_void));
+    println!("  patched view: {:?}", cls_name);
+
+    // ── Recurse into subviews ────────────────────────────────────────────
+    let subviews: *mut AnyObject = msg_send![view, subviews];
+    if !subviews.is_null() {
+        let len: usize = msg_send![subviews, count];
+        for i in 0..len {
+            let child: *mut AnyObject = msg_send![subviews, objectAtIndex: i];
+            count += apply_tracking_recursive(child);
+        }
+    }
+
+    count
+}
+
+/// Create and add a single `NSTrackingArea` to `view`.
+#[cfg(target_os = "macos")]
+unsafe fn add_tracking_area_to_view(view: *mut AnyObject) {
+    //   NSTrackingMouseEnteredAndExited = 0x01
+    //   NSTrackingMouseMoved            = 0x02   ← drives :hover
+    //   NSTrackingCursorUpdate          = 0x04   ← drives cursor: pointer/grab
+    //   NSTrackingActiveAlways          = 0x80   ← track even when panel is inactive
+    //   NSTrackingInVisibleRect         = 0x200  ← auto-resize with view bounds
+    //   NSTrackingEnabledDuringMouseDrag= 0x400  ← keep tracking while dragging
+    let options: usize = 0x01 | 0x02 | 0x04 | 0x80 | 0x200 | 0x400;
+
+    // Rect is ignored when InVisibleRect is set
+    let rect = CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(0.0, 0.0));
+    let nil: *mut AnyObject = std::ptr::null_mut();
+
+    let tracking_cls =
+        AnyClass::get("NSTrackingArea").expect("NSTrackingArea class not found");
+    let tracking_area: *mut AnyObject = msg_send![tracking_cls, alloc];
+    let tracking_area: *mut AnyObject = msg_send![
+        tracking_area,
+        initWithRect: rect
+        options: options
+        owner: view
+        userInfo: nil
+    ];
+
+    let _: () = msg_send![view, addTrackingArea: tracking_area];
+}
+
+// ── NSPanel runtime-swizzle + tracking ───────────────────────────────────────
 
 /// One-time setup: swizzle the Tauri NSWindow into an NSPanel and apply
 /// the NonactivatingPanel style mask.
@@ -182,14 +328,20 @@ pub fn setup_window_behavior(window: &tauri::WebviewWindow) {
             return;
         };
         unsafe {
-            // ── 1. Swizzle NSWindow → NSPanel ─────────────────────────────
+            // ── 1. Swizzle NSWindow → SpotlightPanel ─────────────────────
+            // SpotlightPanel is a runtime subclass of NSPanel that overrides
+            // canBecomeKeyWindow → YES.  Without this, WebKit treats the
+            // borderless NonactivatingPanel as a background window and
+            // suppresses :hover / cursor CSS states.
+            register_spotlight_panel_class();
+
             let before = std::ffi::CStr::from_ptr(
                 object_getClassName(ns_win as *const std::ffi::c_void),
             );
             println!("setup_window_behavior: class BEFORE = {:?}", before);
 
-            let panel_cls =
-                AnyClass::get("NSPanel").expect("NSPanel class not found in ObjC runtime");
+            let panel_cls = AnyClass::get("SpotlightPanel")
+                .expect("SpotlightPanel class not found — register_spotlight_panel_class failed");
             object_setClass(
                 ns_win as *mut std::ffi::c_void,
                 panel_cls as *const AnyClass as *const std::ffi::c_void,
@@ -219,6 +371,22 @@ pub fn setup_window_behavior(window: &tauri::WebviewWindow) {
             // ── 3. Panel properties ───────────────────────────────────────
             let _: () = msg_send![ns_win, setHidesOnDeactivate: false];
             let _: () = msg_send![ns_win, setHasShadow: false];
+
+            // ── 4. Mouse tracking ────────────────────────────────────────
+            // NonactivatingPanel suppresses hover/cursor events by default.
+            // Inject NSTrackingAreas on the contentView AND every subview
+            // recursively (the WKWebView is nested several levels deep).
+            let _: () = msg_send![ns_win, setAcceptsMouseMovedEvents: true];
+            let _: () = msg_send![ns_win, setFloatingPanel: true];
+
+            let content_view: *mut AnyObject = msg_send![ns_win, contentView];
+            if !content_view.is_null() {
+                let count = apply_tracking_recursive(content_view);
+                println!(
+                    "setup_window_behavior: NSTrackingArea injected on {} views",
+                    count
+                );
+            }
         }
     }
 }
