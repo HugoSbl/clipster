@@ -59,6 +59,10 @@ const timelineRef = ref<InstanceType<typeof Timeline> | null>(null);
 // Animation state
 const isHiding = ref(false);
 
+// Cooldown: ignore blur events shortly after gaining focus
+let lastFocusTime = 0;
+const BLUR_COOLDOWN_MS = 400;
+
 let unlistenFn: UnlistenFn | null = null;
 let unlistenSettings: UnlistenFn | null = null;
 let unlistenBlur: UnlistenFn | null = null;
@@ -110,11 +114,17 @@ onMounted(async () => {
     settingsStore.openSettings();
   });
 
-  // Listen for window blur (focus lost) - hide with animation
+  // Listen for window focus/blur - hide with animation on blur
   const appWindow = getCurrentWindow();
   unlistenBlur = await appWindow.onFocusChanged(({ payload: focused }) => {
-    if (!focused && !settingsStore.showModal) {
-      hideWithAnimation();
+    if (focused) {
+      lastFocusTime = Date.now();
+    } else if (!settingsStore.showModal) {
+      // Ignore blur events that happen too quickly after gaining focus
+      // (global shortcut on macOS causes a brief focus bounce)
+      if (Date.now() - lastFocusTime > BLUR_COOLDOWN_MS) {
+        hideWithAnimation();
+      }
     }
   });
 });
