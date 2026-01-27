@@ -19,7 +19,7 @@ use commands::pinboard_commands::{
 use commands::settings_commands::{
     get_history_limit, get_settings, set_history_limit, update_setting,
 };
-use commands::window_commands::{hide_window, quit_app, show_window};
+use commands::window_commands::{ensure_overlay, hide_window, quit_app, show_window};
 use std::sync::Arc;
 use storage::Database;
 use tauri::menu::{Menu, MenuItem};
@@ -38,13 +38,12 @@ pub struct AppState {
 fn toggle_window_visibility(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
-            // Window is visible, hide it
             let _ = window.hide();
             println!("Window hidden");
         } else {
-            // Window is hidden, show and focus it
             let _ = window.show();
             let _ = window.set_focus();
+            ensure_overlay(&window);
             println!("Window shown and focused");
         }
     }
@@ -115,10 +114,10 @@ fn main() {
                     }
                     "settings" => {
                         println!("Settings clicked");
-                        // Show window and emit event to open settings modal
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
+                            ensure_overlay(&window);
                             let _ = window.emit("open-settings", ());
                         }
                     }
@@ -158,39 +157,17 @@ fn main() {
                     eprintln!("Could not get primary monitor");
                 }
 
-                // Apply vibrancy effect and window level on macOS
+                // Apply vibrancy effect on macOS
                 #[cfg(target_os = "macos")]
                 {
                     use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
-
-                    // Apply vibrancy
                     let _ = apply_vibrancy(&window, NSVisualEffectMaterial::HudWindow, None, Some(16.0));
                     println!("Applied vibrancy effect");
-
-                    // Set window level and collection behavior for full-screen support
-                    if let Ok(ns_window) = window.ns_window() {
-                        unsafe {
-                            use objc2::runtime::AnyObject;
-                            use objc2::msg_send;
-                            let ns_win: *mut AnyObject = ns_window as *mut AnyObject;
-
-                            // kCGDockWindowLevel = 20, we use 25 to be above it
-                            let _: () = msg_send![ns_win, setLevel: 25_i64];
-                            println!("Window level set above dock");
-
-                            // Set collection behavior to appear on all spaces including full-screen
-                            // NSWindowCollectionBehaviorCanJoinAllSpaces = 1 << 0
-                            // NSWindowCollectionBehaviorFullScreenAuxiliary = 1 << 8
-                            // NSWindowCollectionBehaviorStationary = 1 << 4 (stays in place during Mission Control)
-                            let behavior: u64 = (1 << 0) | (1 << 8) | (1 << 4);
-                            let _: () = msg_send![ns_win, setCollectionBehavior: behavior];
-                            println!("Window collection behavior set for all spaces");
-                        }
-                    }
                 }
 
-                // Show window after configuration
+                // Show window and apply overlay properties (level, collection behavior)
                 let _ = window.show();
+                ensure_overlay(&window);
             }
 
             Ok(())
