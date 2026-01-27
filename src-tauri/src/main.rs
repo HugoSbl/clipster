@@ -25,7 +25,7 @@ use storage::Database;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use clipboard::clipboard_monitor;
 use tauri_plugin_autostart::MacosLauncher;
 
@@ -63,8 +63,8 @@ fn main() {
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(move |app, shortcut_pressed, _event| {
-                    if shortcut_pressed == &shortcut {
+                .with_handler(move |app, shortcut_pressed, event| {
+                    if shortcut_pressed == &shortcut && event.state == ShortcutState::Pressed {
                         toggle_window_visibility(app);
                     }
                 })
