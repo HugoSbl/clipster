@@ -126,8 +126,8 @@ pub fn reposition_to_cursor_monitor(_window: &tauri::WebviewWindow) {}
 pub fn ensure_overlay(window: &tauri::WebviewWindow) {
     #[cfg(target_os = "macos")]
     {
-        if let Ok(ns_window) = window.ns_window() {
-            unsafe {
+        match window.ns_window() {
+            Ok(ns_window) => unsafe {
                 use objc2::msg_send;
                 use objc2::runtime::AnyObject;
                 let ns_win: *mut AnyObject = ns_window as *mut AnyObject;
@@ -141,6 +141,14 @@ pub fn ensure_overlay(window: &tauri::WebviewWindow) {
                 // NSWindowCollectionBehaviorFullScreenAuxiliary (1 << 8) — overlay fullscreen Spaces
                 let behavior: u64 = (1 << 0) | (1 << 4) | (1 << 6) | (1 << 8);
                 let _: () = msg_send![ns_win, setCollectionBehavior: behavior];
+
+                // Force the window to front regardless of app activation state
+                let _: () = msg_send![ns_win, orderFrontRegardless];
+
+                println!("ensure_overlay: level=1000, behaviors={}, orderFrontRegardless", behavior);
+            },
+            Err(e) => {
+                eprintln!("ensure_overlay: ns_window() failed: {}", e);
             }
         }
     }
