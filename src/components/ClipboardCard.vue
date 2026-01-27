@@ -364,19 +364,14 @@ const canDragAsNativeFiles = computed(() => {
     return true;
   }
 
-  // Links drag as .webloc files
-  if (item.content_type === 'link' && item.content_text) {
-    return true;
-  }
-
   // Files, audio, documents drag as files
   const paths = getFilePaths();
   return paths.length > 0;
 });
 
-// Check if item is text (uses HTML5 drag for direct paste)
+// Check if item uses HTML5 drag for direct paste (text and links)
 const isTextItem = computed(() => {
-  return props.item.content_type === 'text' && props.item.content_text;
+  return (props.item.content_type === 'text' || props.item.content_type === 'link') && props.item.content_text;
 });
 
 // ============================================================================
@@ -471,13 +466,15 @@ const EDGE_MARGIN = 50;
 const DOUBLE_CLICK_DELAY = 300;
 
 /**
- * Check if near window edge (for triggering native drag)
- * EXCLUDES top edge - pins are at the top, we want to allow drops there
+ * Check if cursor should trigger native drag (near edge or outside window).
+ * EXCLUDES top edge - pins are at the top, we want to allow drops there.
  */
-const isNearEdge = (x: number, y: number): boolean => {
+const shouldTriggerNativeDrag = (x: number, y: number): boolean => {
   const w = window.innerWidth;
   const h = window.innerHeight;
-  // Left, right, or bottom edge - NOT top (where pins are)
+  // Outside window bounds (cursor already left the webview)
+  if (x <= 0 || x >= w || y <= 0 || y >= h) return true;
+  // Near left, right, or bottom edge - NOT top (where pins are)
   return x <= EDGE_MARGIN || x >= w - EDGE_MARGIN || y >= h - EDGE_MARGIN;
 };
 
@@ -521,8 +518,13 @@ const removeGhost = () => {
 
 /**
  * Mousedown - start tracking (for native file drag only, NOT text)
+ *
+ * IMPORTANT: Mouse listeners are added SYNCHRONOUSLY before any async work.
+ * Path preparation runs in the background. This prevents the race condition
+ * where the user moves the mouse during async file preparation and the
+ * mousemove events are missed.
  */
-const handleMouseDown = async (e: MouseEvent) => {
+const handleMouseDown = (e: MouseEvent) => {
   if (!canDragAsNativeFiles.value || e.button !== 0) return;
 
   e.preventDefault();
@@ -531,20 +533,23 @@ const handleMouseDown = async (e: MouseEvent) => {
   dragStartPos.value = { x: e.clientX, y: e.clientY };
   hasTriggeredNative.value = false;
 
-  // Prepare paths
-  try {
-    const { items } = await getFilePathsForDrag();
-    pendingDragPaths.value = items.map(sanitizePath);
-
-    invoke<string>('create_drag_icon', { path: pendingDragPaths.value[0] })
-      .then((icon) => { pendingDragIcon.value = icon; })
-      .catch(() => { pendingDragIcon.value = pendingDragPaths.value[0]; });
-  } catch (err) {
-    console.error('[handleMouseDown] Error:', err);
-  }
-
+  // Add listeners IMMEDIATELY so we never miss mouse events
   document.addEventListener('mousemove', handleMouseMove);
   document.addEventListener('mouseup', handleMouseUp);
+
+  // Prepare paths in background (non-blocking)
+  getFilePathsForDrag()
+    .then(({ items }) => {
+      pendingDragPaths.value = items.map(sanitizePath);
+      if (pendingDragPaths.value[0]) {
+        invoke<string>('create_drag_icon', { path: pendingDragPaths.value[0] })
+          .then((icon) => { pendingDragIcon.value = icon; })
+          .catch(() => { pendingDragIcon.value = pendingDragPaths.value[0]; });
+      }
+    })
+    .catch((err: unknown) => {
+      console.error('[handleMouseDown] Path preparation error:', err);
+    });
 };
 
 /**
@@ -585,9 +590,9 @@ const handleMouseMove = async (e: MouseEvent) => {
       pinboardStore.$patch({ hoveredDropZone: null });
     }
 
-    // Check if near edge - trigger native drag
-    if (isNearEdge(e.clientX, e.clientY) && pendingDragPaths.value.length > 0) {
-      console.log('[handleMouseMove] Near edge - starting native drag');
+    // Trigger native drag when near edge or cursor left the window
+    if (shouldTriggerNativeDrag(e.clientX, e.clientY) && pendingDragPaths.value.length > 0) {
+      console.log('[handleMouseMove] Triggering native drag at', e.clientX, e.clientY);
       hasTriggeredNative.value = true;
 
       // Cleanup before async
@@ -596,13 +601,28 @@ const handleMouseMove = async (e: MouseEvent) => {
       removeGhost();
 
       try {
-        await invoke('hide_window');
-        await new Promise((r) => setTimeout(r, 50));
+        // CRITICAL: startDrag() MUST be called while the window is still visible.
+        // macOS needs a visible window to create the NSDraggingSession.
+        // We start the drag first, then hide the window after a brief delay
+        // to let the OS capture the drag session.
+        const dragPromise = startDrag(
+          {
+            item: pendingDragPaths.value,
+            icon: pendingDragIcon.value || pendingDragPaths.value[0],
+          },
+          (payload) => {
+            console.log('[startDrag] Event:', payload.result);
+          }
+        );
 
-        await startDrag({
-          item: pendingDragPaths.value,
-          icon: pendingDragIcon.value || pendingDragPaths.value[0],
-        });
+        // Hide window after OS has captured the drag session
+        setTimeout(() => {
+          invoke('hide_window').catch((err: unknown) => {
+            console.error('[handleMouseMove] hide_window error:', err);
+          });
+        }, 100);
+
+        await dragPromise;
       } catch (err) {
         console.error('[handleMouseMove] Native drag error:', err);
         await invoke('show_window');
