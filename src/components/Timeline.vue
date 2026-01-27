@@ -413,37 +413,79 @@ const handleCardClick = (item: ClipboardItem) => {
 }
 
 /* Dark mode */
-@media (prefers-color-scheme: dark) {
-  .timeline-header {
-    border-bottom-color: #374151;
-  }
+html.dark .timeline-header {
+  border-bottom-color: #374151;
+}
 
-  .timeline-header h2 {
-    color: #f9fafb;
-  }
+html.dark .timeline-header h2 {
+  color: #f9fafb;
+}
 
-  .item-count {
-    color: #9ca3af;
-  }
+html.dark .item-count {
+  color: #9ca3af;
+}
 
-  .timeline-scroll::-webkit-scrollbar-track {
-    background: #1f2937;
-  }
+html.dark .timeline-scroll::-webkit-scrollbar-track {
+  background: #1f2937;
+}
 
-  .timeline-scroll::-webkit-scrollbar-thumb {
-    background: #4b5563;
-  }
+html.dark .timeline-scroll::-webkit-scrollbar-thumb {
+  background: #4b5563;
+}
 
-  .timeline-scroll::-webkit-scrollbar-thumb:hover {
-    background: #6b7280;
-  }
+html.dark .timeline-scroll::-webkit-scrollbar-thumb:hover {
+  background: #6b7280;
+}
 
-  .empty-icon {
-    color: #4b5563;
-  }
+html.dark .empty-icon {
+  color: #4b5563;
+}
 
-  .modal-content {
-    background: #1f2937;
-  }
+html.dark .loading-state,
+html.dark .empty-state {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+html.dark .error-state {
+  color: #fca5a5;
+}
+
+html.dark .error-state button {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+}
+
+html.dark .error-state button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+html.dark .empty-state p {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+html.dark .empty-hint {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+html.dark .hint {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+html.dark .modal-content {
+  background: #1f2937;
+}
+
+html.dark .modal-close {
+  background: #374151;
+}
+
+html.dark .modal-close:hover {
+  background: #4b5563;
+}
+
+html.dark .modal-loading {
+  color: rgba(255, 255, 255, 0.5);
 }
 </style>

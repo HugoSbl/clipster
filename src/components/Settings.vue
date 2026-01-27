@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { useSettingsStore } from '@/stores/settings';
 import { useClipboardStore } from '@/stores/clipboard';
+import type { Theme } from '@/stores/settings';
 
 const settingsStore = useSettingsStore();
 const clipboardStore = useClipboardStore();
@@ -13,11 +14,15 @@ const startHidden = ref(false);
 // Computed
 const isOpen = computed(() => settingsStore.showModal);
 
+// Local state for theme
+const activeTheme = ref<Theme>('dark');
+
 // Initialize local state when modal opens
 onMounted(async () => {
   await settingsStore.fetchSettings();
   historyLimit.value = settingsStore.historyLimit;
   startHidden.value = settingsStore.startHidden;
+  activeTheme.value = settingsStore.theme;
 });
 
 // Close modal
@@ -44,12 +49,19 @@ const clearHistory = async () => {
   }
 };
 
+// Change theme
+const setTheme = async (theme: Theme) => {
+  activeTheme.value = theme;
+  await settingsStore.updateSetting('theme', theme);
+};
+
 // Reset to defaults
 const resetDefaults = async () => {
   if (confirm('Reset all settings to defaults?')) {
     await settingsStore.resetToDefaults();
     historyLimit.value = settingsStore.historyLimit;
     startHidden.value = settingsStore.startHidden;
+    activeTheme.value = settingsStore.theme;
   }
 };
 
@@ -86,6 +98,51 @@ const handleKeydown = (e: KeyboardEvent) => {
 
         <!-- Content -->
         <div class="settings-content">
+          <!-- Appearance Section -->
+          <section class="settings-section">
+            <h3>Appearance</h3>
+
+            <div class="setting-item">
+              <label>Theme</label>
+              <div class="theme-switcher">
+                <button
+                  class="theme-btn"
+                  :class="{ active: activeTheme === 'light' }"
+                  @click="setTheme('light')"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="5" />
+                    <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+                  </svg>
+                  Light
+                </button>
+                <button
+                  class="theme-btn"
+                  :class="{ active: activeTheme === 'dark' }"
+                  @click="setTheme('dark')"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                  </svg>
+                  Dark
+                </button>
+                <button
+                  class="theme-btn"
+                  :class="{ active: activeTheme === 'system' }"
+                  @click="setTheme('system')"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                    <line x1="8" y1="21" x2="16" y2="21" />
+                    <line x1="12" y1="17" x2="12" y2="21" />
+                  </svg>
+                  System
+                </button>
+              </div>
+              <p class="setting-description">Choose between light, dark, or system theme</p>
+            </div>
+          </section>
+
           <!-- General Section -->
           <section class="settings-section">
             <h3>General</h3>
@@ -278,6 +335,44 @@ const handleKeydown = (e: KeyboardEvent) => {
   color: #6b7280;
 }
 
+/* Theme switcher */
+.theme-switcher {
+  display: flex;
+  gap: 8px;
+}
+
+.theme-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #f9fafb;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: #6b7280;
+  transition: all 0.15s;
+}
+
+.theme-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.theme-btn:hover {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+  color: #374151;
+}
+
+.theme-btn.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: white;
+}
+
 /* Range input */
 input[type="range"] {
   flex: 1;
@@ -388,84 +483,100 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 /* Dark mode */
-@media (prefers-color-scheme: dark) {
-  .settings-modal {
-    background: #1f2937;
-  }
+html.dark .settings-modal {
+  background: #1f2937;
+}
 
-  .settings-header {
-    border-bottom-color: #374151;
-  }
+html.dark .settings-header {
+  border-bottom-color: #374151;
+}
 
-  .settings-header h2 {
-    color: #f9fafb;
-  }
+html.dark .settings-header h2 {
+  color: #f9fafb;
+}
 
-  .close-btn {
-    color: #9ca3af;
-  }
+html.dark .close-btn {
+  color: #9ca3af;
+}
 
-  .close-btn:hover {
-    background: #374151;
-    color: #f3f4f6;
-  }
+html.dark .close-btn:hover {
+  background: #374151;
+  color: #f3f4f6;
+}
 
-  .settings-section h3 {
-    color: #9ca3af;
-  }
+html.dark .settings-section h3 {
+  color: #9ca3af;
+}
 
-  .setting-item label {
-    color: #f3f4f6;
-  }
+html.dark .setting-item label {
+  color: #f3f4f6;
+}
 
-  .setting-description {
-    color: #9ca3af;
-  }
+html.dark .setting-description {
+  color: #9ca3af;
+}
 
-  input[type="range"] {
-    background: #374151;
-  }
+html.dark input[type="range"] {
+  background: #374151;
+}
 
-  .toggle-btn {
-    background: #374151;
-    border-color: #4b5563;
-    color: #9ca3af;
-  }
+html.dark .theme-btn {
+  background: #374151;
+  border-color: #4b5563;
+  color: #9ca3af;
+}
 
-  .toggle-btn.active {
-    background: #3b82f6;
-    border-color: #3b82f6;
-    color: white;
-  }
+html.dark .theme-btn:hover {
+  background: #4b5563;
+  border-color: #6b7280;
+  color: #e5e7eb;
+}
 
-  .shortcut-display {
-    background: #374151;
-    border-color: #4b5563;
-    color: #e5e7eb;
-  }
+html.dark .theme-btn.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: white;
+}
 
-  .danger-btn {
-    background: #450a0a;
-    border-color: #991b1b;
-    color: #fca5a5;
-  }
+html.dark .toggle-btn {
+  background: #374151;
+  border-color: #4b5563;
+  color: #9ca3af;
+}
 
-  .danger-btn:hover {
-    background: #7f1d1d;
-  }
+html.dark .toggle-btn.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: white;
+}
 
-  .settings-footer {
-    border-top-color: #374151;
-  }
+html.dark .shortcut-display {
+  background: #374151;
+  border-color: #4b5563;
+  color: #e5e7eb;
+}
 
-  .secondary-btn {
-    background: #374151;
-    border-color: #4b5563;
-    color: #e5e7eb;
-  }
+html.dark .danger-btn {
+  background: #450a0a;
+  border-color: #991b1b;
+  color: #fca5a5;
+}
 
-  .secondary-btn:hover {
-    background: #4b5563;
-  }
+html.dark .danger-btn:hover {
+  background: #7f1d1d;
+}
+
+html.dark .settings-footer {
+  border-top-color: #374151;
+}
+
+html.dark .secondary-btn {
+  background: #374151;
+  border-color: #4b5563;
+  color: #e5e7eb;
+}
+
+html.dark .secondary-btn:hover {
+  background: #4b5563;
 }
 </style>

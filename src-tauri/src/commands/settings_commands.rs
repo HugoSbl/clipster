@@ -8,6 +8,7 @@ pub struct AppSettings {
     pub shortcut: String,
     pub history_limit: u32,
     pub start_hidden: bool,
+    pub theme: String,
 }
 
 impl Default for AppSettings {
@@ -16,6 +17,7 @@ impl Default for AppSettings {
             shortcut: "Ctrl+Shift+V".to_string(),
             history_limit: 500,
             start_hidden: false,
+            theme: "dark".to_string(),
         }
     }
 }
@@ -40,10 +42,16 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
         .unwrap_or_else(|| "false".to_string());
     let start_hidden = start_hidden_str == "true";
 
+    let theme = state
+        .db
+        .get_setting("theme")?
+        .unwrap_or_else(|| "dark".to_string());
+
     Ok(AppSettings {
         shortcut,
         history_limit,
         start_hidden,
+        theme,
     })
 }
 

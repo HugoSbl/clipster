@@ -17,6 +17,41 @@ const clipboardStore = useClipboardStore();
 const pinboardStore = usePinboardStore();
 const settingsStore = useSettingsStore();
 
+// Apply theme to document
+const applyTheme = (theme: string) => {
+  const html = document.documentElement;
+
+  if (theme === 'dark') {
+    html.classList.add('dark');
+    html.style.colorScheme = 'dark';
+  } else if (theme === 'light') {
+    html.classList.remove('dark');
+    html.style.colorScheme = 'light';
+  } else {
+    // System: follow OS preference
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    html.classList.toggle('dark', prefersDark);
+    html.style.colorScheme = prefersDark ? 'dark' : 'light';
+  }
+};
+
+// Listen for OS theme changes (for "system" mode)
+const systemMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+const handleSystemThemeChange = () => {
+  if (settingsStore.theme === 'system') {
+    applyTheme('system');
+  }
+};
+systemMediaQuery.addEventListener('change', handleSystemThemeChange);
+
+// Watch theme changes
+watch(
+  () => settingsStore.theme,
+  (theme) => {
+    applyTheme(theme);
+  }
+);
+
 // Component refs
 const searchBarRef = ref<InstanceType<typeof SearchBar> | null>(null);
 const timelineRef = ref<InstanceType<typeof Timeline> | null>(null);
@@ -64,6 +99,9 @@ onMounted(async () => {
     clipboardStore.fetchHistory(),
   ]);
 
+  // Apply persisted theme
+  applyTheme(settingsStore.theme);
+
   // Set up real-time event listener
   unlistenFn = await clipboardStore.setupEventListener();
 
@@ -105,6 +143,9 @@ onUnmounted(() => {
   if (unlistenBlur) {
     unlistenBlur();
   }
+
+  // Remove system theme listener
+  systemMediaQuery.removeEventListener('change', handleSystemThemeChange);
 
   // Remove global drop prevention listeners
   if (preventDefaults) {
@@ -209,15 +250,21 @@ body,
   overflow: hidden;
 }
 
-@media (prefers-color-scheme: dark) {
-  .app-container {
-    background:
-      radial-gradient(ellipse at 20% 50%, rgba(120, 119, 198, 0.12) 0%, transparent 50%),
-      radial-gradient(ellipse at 80% 20%, rgba(255, 119, 168, 0.08) 0%, transparent 50%),
-      radial-gradient(ellipse at 50% 80%, rgba(99, 179, 237, 0.08) 0%, transparent 50%),
-      rgba(15, 15, 20, 0.94);
-    border-top-color: rgba(255, 255, 255, 0.06);
-  }
+html.dark {
+  color: rgba(255, 255, 255, 0.87);
+}
+
+html.dark .app-container {
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(120, 119, 198, 0.12) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(255, 119, 168, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 80%, rgba(99, 179, 237, 0.08) 0%, transparent 50%),
+    rgba(15, 15, 20, 0.94);
+  border-top-color: rgba(255, 255, 255, 0.06);
+}
+
+html.dark .top-bar {
+  border-bottom-color: rgba(255, 255, 255, 0.06);
 }
 
 .top-bar {
@@ -240,7 +287,7 @@ button {
   cursor: pointer;
 }
 
-/* Light mode text color */
+/* Base text color */
 :root {
   color: #374151;
 }

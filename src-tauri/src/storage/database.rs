@@ -149,6 +149,12 @@ impl Database {
         )
         .map_err(|e| format!("Failed to insert default start_hidden: {}", e))?;
 
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('theme', 'dark')",
+            [],
+        )
+        .map_err(|e| format!("Failed to insert default theme: {}", e))?;
+
         Ok(())
     }
 

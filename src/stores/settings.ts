@@ -1,10 +1,13 @@
 import { defineStore } from 'pinia';
 import { invoke } from '@tauri-apps/api/core';
 
+export type Theme = 'light' | 'dark' | 'system';
+
 export interface AppSettings {
   shortcut: string;
   history_limit: number;
   start_hidden: boolean;
+  theme: Theme;
 }
 
 interface SettingsState {
@@ -18,6 +21,7 @@ const defaultSettings: AppSettings = {
   shortcut: 'Ctrl+Shift+V',
   history_limit: 500,
   start_hidden: false,
+  theme: 'dark',
 };
 
 export const useSettingsStore = defineStore('settings', {
@@ -32,6 +36,7 @@ export const useSettingsStore = defineStore('settings', {
     shortcut: (state) => state.settings.shortcut,
     historyLimit: (state) => state.settings.history_limit,
     startHidden: (state) => state.settings.start_hidden,
+    theme: (state) => state.settings.theme,
   },
 
   actions: {
@@ -70,6 +75,8 @@ export const useSettingsStore = defineStore('settings', {
           this.settings.history_limit = value as number;
         } else if (key === 'start_hidden') {
           this.settings.start_hidden = value as boolean;
+        } else if (key === 'theme') {
+          this.settings.theme = value as Theme;
         }
 
         return true;
@@ -117,6 +124,7 @@ export const useSettingsStore = defineStore('settings', {
         await this.updateSetting('shortcut', defaultSettings.shortcut);
         await this.setHistoryLimit(defaultSettings.history_limit);
         await this.updateSetting('start_hidden', defaultSettings.start_hidden);
+        await this.updateSetting('theme', defaultSettings.theme);
         return true;
       } catch (e) {
         this.error = e instanceof Error ? e.message : String(e);

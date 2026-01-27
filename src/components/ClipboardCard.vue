@@ -1301,68 +1301,66 @@ const cleanupDrag = () => {
    DARK MODE
    ============================================================================ */
 
-@media (prefers-color-scheme: dark) {
-  .clipboard-card {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.12);
-    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
-  }
+html.dark .clipboard-card {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+}
 
-  .clipboard-card:hover {
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-  }
+html.dark .clipboard-card:hover {
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
 
-  .clipboard-card.selected {
-    border-color: rgba(var(--type-rgb), 0.5);
-    box-shadow:
-      0 4px 30px rgba(0, 0, 0, 0.3),
-      0 0 0 1px rgba(var(--type-rgb), 0.3);
-  }
+html.dark .clipboard-card.selected {
+  border-color: rgba(var(--type-rgb), 0.5);
+  box-shadow:
+    0 4px 30px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(var(--type-rgb), 0.3);
+}
 
-  /* Dark glass pills */
-  .glass-pill {
-    background: rgba(0, 0, 0, 0.35);
-    border-color: rgba(255, 255, 255, 0.12);
-    box-shadow:
-      0 1px 3px rgba(0, 0, 0, 0.15),
-      inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  }
+/* Dark glass pills */
+html.dark .glass-pill {
+  background: rgba(0, 0, 0, 0.35);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.15),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
 
-  .header-label {
-    color: rgba(255, 255, 255, 0.9);
-  }
+html.dark .header-label {
+  color: rgba(255, 255, 255, 0.9);
+}
 
-  .type-pill {
-    color: rgb(var(--type-rgb));
-  }
+html.dark .type-pill {
+  color: rgb(var(--type-rgb));
+}
 
-  .footer-time {
-    color: rgba(255, 255, 255, 0.45);
-  }
+html.dark .footer-time {
+  color: rgba(255, 255, 255, 0.45);
+}
 
-  .footer-app-placeholder {
-    color: rgba(255, 255, 255, 0.3);
-  }
+html.dark .footer-app-placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
 
-  .text-preview {
-    color: rgba(255, 255, 255, 0.8);
-  }
+html.dark .text-preview {
+  color: rgba(255, 255, 255, 0.8);
+}
 
-  .placeholder-text {
-    color: rgba(255, 255, 255, 0.3);
-  }
+html.dark .placeholder-text {
+  color: rgba(255, 255, 255, 0.3);
+}
 
-  .content-icon {
-    color: rgb(var(--type-rgb));
-    opacity: 0.8;
-  }
+html.dark .content-icon {
+  color: rgb(var(--type-rgb));
+  opacity: 0.8;
+}
 
-  .content-label {
-    color: rgba(255, 255, 255, 0.85);
-  }
+html.dark .content-label {
+  color: rgba(255, 255, 255, 0.85);
+}
 
-  .content-sublabel {
-    color: rgba(255, 255, 255, 0.4);
-  }
+html.dark .content-sublabel {
+  color: rgba(255, 255, 255, 0.4);
 }
 </style>

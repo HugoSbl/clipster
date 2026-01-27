@@ -771,4 +771,107 @@ const handleClickOutside = () => {
 .edit-popover.popover-leave-to {
   transform: translateX(-50%) translateY(-4px);
 }
+
+/* Dark mode */
+html.dark .pinboard-tabs.drag-mode {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+html.dark .pinboard-tabs::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+html.dark .tab {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+html.dark .tab:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+html.dark .tab.active {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+html.dark .add-tab {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+html.dark .add-tab:hover,
+html.dark .add-tab.active {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+}
+
+html.dark .tab-drop-zone.drop-target .tab {
+  background: rgba(59, 130, 246, 0.25);
+  color: #93bbfd;
+}
+
+html.dark .popover {
+  background: #1f2937;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+}
+
+html.dark .popover-arrow {
+  background: #1f2937;
+  box-shadow: -2px -2px 4px rgba(0, 0, 0, 0.2);
+}
+
+html.dark .icon-btn {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+html.dark .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+html.dark .icon-btn.selected {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.2);
+}
+
+html.dark .input-row {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+html.dark .name-input {
+  color: rgba(255, 255, 255, 0.87);
+}
+
+html.dark .name-input::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+html.dark .cancel-link {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+html.dark .cancel-link:hover {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+html.dark .context-menu {
+  background: #1f2937;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+html.dark .context-item {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+html.dark .context-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+html.dark .context-item.danger {
+  color: #fca5a5;
+}
+
+html.dark .context-item.danger:hover {
+  background: rgba(239, 68, 68, 0.15);
+}
 </style>

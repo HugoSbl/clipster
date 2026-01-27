@@ -192,4 +192,36 @@ onUnmounted(() => {
   width: 12px;
   height: 12px;
 }
+
+/* Dark mode */
+html.dark .search-icon {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+html.dark .search-input {
+  color: rgba(255, 255, 255, 0.87);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+html.dark .search-input::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+html.dark .search-input:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+html.dark .search-input:focus {
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.1);
+}
+
+html.dark .clear-btn {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+html.dark .clear-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
+}
 </style>
