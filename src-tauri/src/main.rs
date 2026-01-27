@@ -19,7 +19,9 @@ use commands::pinboard_commands::{
 use commands::settings_commands::{
     get_history_limit, get_settings, set_history_limit, update_setting,
 };
-use commands::window_commands::{ensure_overlay, hide_window, quit_app, show_window};
+use commands::window_commands::{
+    ensure_overlay, hide_window, quit_app, reposition_to_cursor_monitor, show_window,
+};
 use std::sync::Arc;
 use storage::Database;
 use tauri::menu::{Menu, MenuItem};
@@ -41,6 +43,7 @@ fn toggle_window_visibility(app: &tauri::AppHandle) {
             let _ = window.hide();
             println!("Window hidden");
         } else {
+            reposition_to_cursor_monitor(&window);
             let _ = window.show();
             let _ = window.set_focus();
             ensure_overlay(&window);
@@ -115,6 +118,7 @@ fn main() {
                     "settings" => {
                         println!("Settings clicked");
                         if let Some(window) = app.get_webview_window("main") {
+                            reposition_to_cursor_monitor(&window);
                             let _ = window.show();
                             let _ = window.set_focus();
                             ensure_overlay(&window);
@@ -131,31 +135,9 @@ fn main() {
 
             println!("System tray created");
 
-            // Configure window size and position based on primary monitor
+            // Configure window size and position on the cursor's monitor
             if let Some(window) = app.get_webview_window("main") {
-                if let Ok(Some(monitor)) = window.primary_monitor() {
-                    let size = monitor.size();
-                    let scale = monitor.scale_factor();
-
-                    // Calculate dimensions: full width, 1/3 height
-                    let width = size.width as f64 / scale;
-                    let height = (size.height as f64 / scale) * 0.33;
-
-                    // Position at bottom of screen (above dock area)
-                    let y = (size.height as f64 / scale) - height;
-
-                    // Apply size and position
-                    if let Err(e) = window.set_size(tauri::LogicalSize::new(width, height)) {
-                        eprintln!("Failed to set window size: {}", e);
-                    }
-                    if let Err(e) = window.set_position(tauri::LogicalPosition::new(0.0, y)) {
-                        eprintln!("Failed to set window position: {}", e);
-                    }
-
-                    println!("Window configured: {}x{} at y={}", width, height, y);
-                } else {
-                    eprintln!("Could not get primary monitor");
-                }
+                reposition_to_cursor_monitor(&window);
 
                 // Apply vibrancy effect on macOS
                 #[cfg(target_os = "macos")]
