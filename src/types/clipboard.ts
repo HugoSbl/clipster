@@ -42,3 +42,12 @@ export interface ClipboardChangedPayload {
   /** If this item replaced an existing one (move to top), contains the old item's ID */
   replaced_item_id?: string;
 }
+
+/**
+ * Payload for clipboard-item-thumbnail-updated event
+ * Matches Rust struct: ThumbnailUpdatedPayload
+ */
+export interface ThumbnailUpdatedPayload {
+  id: string;
+  thumbnail_base64: string;
+}

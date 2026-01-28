@@ -4,7 +4,8 @@
 //! macOS: Uses polling with arboard
 
 use crate::clipboard::clipboard_reader::{self, ClipboardContent};
-use crate::models::ClipboardItem;
+use crate::clipboard::og_fetcher;
+use crate::models::{ClipboardItem, ContentType};
 use crate::storage::{file_storage, Database, FileStorage};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -25,6 +26,13 @@ pub struct ClipboardChangedPayload {
     /// If this item replaced an existing one (move to top), this contains the old item's ID
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replaced_item_id: Option<String>,
+}
+
+/// Event payload for async thumbnail updates (e.g., OG image for links)
+#[derive(Clone, serde::Serialize)]
+pub struct ThumbnailUpdatedPayload {
+    pub id: String,
+    pub thumbnail_base64: String,
 }
 
 /// Clipboard handler that processes clipboard changes
@@ -100,7 +108,44 @@ impl ClipboardMonitorHandler {
         eprintln!("╚═══════════════════════════════════════════════════════════");
 
         let item = ClipboardItem::new_text(text, source_app, source_app_icon);
+        let is_link = item.content_type == ContentType::Link;
+        let item_id = item.id.clone();
+        let item_url = item.content_text.clone();
         self.save_and_emit(item, replaced_item_id);
+
+        // Asynchronously fetch OG preview image for links
+        if is_link {
+            if let Some(url) = item_url {
+                let db = Arc::clone(&self.db);
+                let app_handle = self.app_handle.clone();
+                thread::spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build();
+                    if let Ok(rt) = rt {
+                        rt.block_on(async {
+                            eprintln!("[OG] Fetching preview for {}", url);
+                            if let Some(thumbnail) = og_fetcher::fetch_og_image_base64(&url).await {
+                                eprintln!("[OG] Got thumbnail for {} ({} chars)", item_id, thumbnail.len());
+                                if let Err(e) = db.update_thumbnail(&item_id, &thumbnail) {
+                                    eprintln!("[OG] DB update failed: {}", e);
+                                    return;
+                                }
+                                let payload = ThumbnailUpdatedPayload {
+                                    id: item_id,
+                                    thumbnail_base64: thumbnail,
+                                };
+                                if let Err(e) = app_handle.emit("clipboard-item-thumbnail-updated", &payload) {
+                                    eprintln!("[OG] Event emit failed: {}", e);
+                                }
+                            } else {
+                                eprintln!("[OG] No OG image found for {}", url);
+                            }
+                        });
+                    }
+                });
+            }
+        }
     }
 
     /// Calculate hash of bytes for deduplication

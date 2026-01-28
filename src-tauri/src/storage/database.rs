@@ -254,6 +254,19 @@ impl Database {
         Ok(rows_affected > 0)
     }
 
+    /// Update the thumbnail_base64 of an existing item (used for async OG image fetching)
+    pub fn update_thumbnail(&self, id: &str, thumbnail_base64: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        conn.execute(
+            "UPDATE clipboard_items SET thumbnail_base64 = ?1 WHERE id = ?2",
+            params![thumbnail_base64, id],
+        )
+        .map_err(|e| format!("Failed to update thumbnail: {}", e))?;
+
+        Ok(())
+    }
+
     /// Search clipboard items by text content
     pub fn search_items(&self, query: &str, limit: usize) -> Result<Vec<ClipboardItem>, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;

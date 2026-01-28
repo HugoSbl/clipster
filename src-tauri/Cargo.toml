@@ -34,6 +34,11 @@ percent-encoding = "2.3"
 # Image processing (for thumbnails)
 image = "0.24"
 
+# OG image fetching for link previews
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+scraper = "0.22"
+tokio = { version = "1", features = ["rt"] }
+
 # Cross-platform clipboard (arboard works on Windows, macOS, Linux)
 arboard = "3.4"
 # Native drag & drop

@@ -1,7 +1,11 @@
 import { defineStore } from 'pinia';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { ClipboardItem, ClipboardChangedPayload } from '@/types';
+import type {
+  ClipboardItem,
+  ClipboardChangedPayload,
+  ThumbnailUpdatedPayload,
+} from '@/types';
 
 interface ClipboardState {
   items: ClipboardItem[];
@@ -246,16 +250,34 @@ export const useClipboardStore = defineStore('clipboard', {
      * Returns unlisten function for cleanup
      */
     async setupEventListener(): Promise<UnlistenFn> {
-      console.log('[ClipboardStore] Setting up clipboard-changed event listener');
-      return await listen<ClipboardChangedPayload>('clipboard-changed', (event) => {
-        console.log('[ClipboardStore] Received clipboard-changed event:', event.payload.item);
-        if (event.payload.replaced_item_id) {
-          console.log('[ClipboardStore] Replacing item:', event.payload.replaced_item_id);
-        }
-        console.log('[ClipboardStore] Current items count before add:', this.items.length);
-        this.addItem(event.payload.item, event.payload.replaced_item_id);
-        console.log('[ClipboardStore] Items count after add:', this.items.length);
-      });
+      console.log('[ClipboardStore] Setting up clipboard event listeners');
+      const unlistenChanged = await listen<ClipboardChangedPayload>(
+        'clipboard-changed',
+        (event) => {
+          console.log('[ClipboardStore] Received clipboard-changed event:', event.payload.item);
+          if (event.payload.replaced_item_id) {
+            console.log('[ClipboardStore] Replacing item:', event.payload.replaced_item_id);
+          }
+          console.log('[ClipboardStore] Current items count before add:', this.items.length);
+          this.addItem(event.payload.item, event.payload.replaced_item_id);
+          console.log('[ClipboardStore] Items count after add:', this.items.length);
+        },
+      );
+
+      const unlistenThumbnail = await listen<ThumbnailUpdatedPayload>(
+        'clipboard-item-thumbnail-updated',
+        (event) => {
+          const item = this.items.find((i) => i.id === event.payload.id);
+          if (item) {
+            item.thumbnail_base64 = event.payload.thumbnail_base64;
+          }
+        },
+      );
+
+      return () => {
+        unlistenChanged();
+        unlistenThumbnail();
+      };
     },
 
     /**

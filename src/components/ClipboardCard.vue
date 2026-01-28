@@ -205,7 +205,7 @@ const documentInfo = computed(() => {
   }
 });
 
-// Check if item has a visual preview (image or file with thumbnail)
+// Check if item has a visual preview (image or file with thumbnail — links use their own layout)
 const hasVisualPreview = computed(() => {
   if (props.item.content_type === 'image' && props.item.thumbnail_base64) {
     return true;
@@ -751,6 +751,7 @@ const cleanupDrag = () => {
     class="clipboard-card"
     :class="{
       'visual-card': hasVisualPreview,
+      'link-preview-card': item.content_type === 'link' && item.thumbnail_base64,
       selected: selected,
       dragging: isDragging,
     }"
@@ -789,12 +790,23 @@ const cleanupDrag = () => {
     <div v-if="hasVisualPreview" class="visual-content">
       <img
         :src="thumbnailDataUrl"
-        :alt="item.content_type === 'image' ? 'Image' : 'File preview'"
+        :alt="item.content_type === 'image' ? 'Image' : item.content_type === 'link' ? 'Link preview' : 'File preview'"
         class="visual-preview"
         loading="lazy"
       />
       <div v-if="item.content_type === 'files' && fileInfo.count > 1" class="glass-pill visual-badge">
         +{{ fileInfo.count - 1 }}
+      </div>
+    </div>
+
+    <!-- Link with OG preview (special layout: image fills top, text at bottom) -->
+    <div v-else-if="item.content_type === 'link' && item.thumbnail_base64" class="link-preview-content">
+      <div class="link-preview-image">
+        <img :src="thumbnailDataUrl" alt="Link preview" loading="lazy" />
+      </div>
+      <div class="link-preview-info">
+        <p class="content-label">{{ urlPreview }}</p>
+        <p class="content-sublabel">{{ item.content_text }}</p>
       </div>
     </div>
 
@@ -821,7 +833,7 @@ const cleanupDrag = () => {
         <p v-if="fileInfo.names.length > 0" class="content-sublabel">{{ fileInfo.names[0] }}</p>
       </div>
 
-      <!-- Link -->
+      <!-- Link without preview -->
       <div v-else-if="item.content_type === 'link'" class="icon-content">
         <div class="content-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1207,6 +1219,93 @@ const cleanupDrag = () => {
   font-size: 10px;
   font-weight: 600;
   z-index: 2;
+}
+
+.link-preview-content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 16px;
+}
+
+.link-preview-image {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.link-preview-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.link-preview-info {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 6px 10px 28px;
+  gap: 2px;
+  overflow: hidden;
+  z-index: 1;
+}
+
+/* Link preview card: header overlays image like visual cards */
+.link-preview-card {
+  position: relative;
+}
+
+.link-preview-card .card-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  padding: 7px 8px 0;
+}
+
+.link-preview-card .glass-pill {
+  background: rgba(0, 0, 0, 0.45);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.link-preview-card .header-label {
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.link-preview-card .delete-btn {
+  background: rgba(239, 68, 68, 0.8);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.link-preview-card .card-footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+}
+
+.link-preview-card .type-pill {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.link-preview-card .type-dot {
+  background: rgb(var(--type-rgb));
+}
+
+.link-preview-card .footer-time {
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.link-preview-card .footer-app-placeholder {
+  color: rgba(255, 255, 255, 0.45);
 }
 
 /* ============================================================================
