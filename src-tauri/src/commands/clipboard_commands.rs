@@ -2,6 +2,7 @@ use crate::clipboard::clipboard_reader;
 use crate::models::ClipboardItem;
 use crate::AppState;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use serde_json;
 use std::fs;
 use std::path::Path;
 use tauri::State;
@@ -85,14 +86,22 @@ pub fn copy_to_clipboard(
             }
         }
         crate::models::ContentType::Image => {
-            // TODO: Implement image copy
-            return Err("Image copy not yet implemented".to_string());
+            if let Some(image_path) = &item.image_path {
+                clipboard_reader::set_clipboard_image(image_path)?;
+            } else {
+                return Err("No image path for item".to_string());
+            }
         }
         crate::models::ContentType::Files
         | crate::models::ContentType::Audio
         | crate::models::ContentType::Documents => {
-            // TODO: Implement file copy
-            return Err("File copy not yet implemented".to_string());
+            if let Some(content_text) = &item.content_text {
+                let file_paths: Vec<String> = serde_json::from_str(content_text)
+                    .map_err(|e| format!("Failed to parse file paths: {}", e))?;
+                clipboard_reader::set_clipboard_files(&file_paths)?;
+            } else {
+                return Err("No file paths for item".to_string());
+            }
         }
     }
 

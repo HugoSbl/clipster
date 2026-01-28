@@ -63,11 +63,20 @@ const toggleStartHidden = async () => {
 };
 
 // Clear history
+const clearConfirmPending = ref(false);
+let clearConfirmTimeout: ReturnType<typeof setTimeout> | null = null;
+
 const clearHistory = async () => {
-  if (confirm('Clear all clipboard history? This cannot be undone. Favorites and pinned items will be kept.')) {
-    const deleted = await clipboardStore.clearHistory();
-    alert(`Cleared ${deleted} items from history.`);
+  if (!clearConfirmPending.value) {
+    clearConfirmPending.value = true;
+    clearConfirmTimeout = setTimeout(() => {
+      clearConfirmPending.value = false;
+    }, 3000);
+    return;
   }
+  clearConfirmPending.value = false;
+  if (clearConfirmTimeout) clearTimeout(clearConfirmTimeout);
+  await clipboardStore.clearHistory();
 };
 
 // Toggle auto-launch
@@ -104,15 +113,25 @@ const setTheme = async (theme: Theme) => {
 };
 
 // Reset to defaults
+const resetConfirmPending = ref(false);
+let resetConfirmTimeout: ReturnType<typeof setTimeout> | null = null;
+
 const resetDefaults = async () => {
-  if (confirm('Reset all settings to defaults?')) {
-    await settingsStore.resetToDefaults();
-    historyLimit.value = settingsStore.historyLimit;
-    startHidden.value = settingsStore.startHidden;
-    activeTheme.value = settingsStore.theme;
-    showMenuBarIcon.value = settingsStore.showMenuBarIcon;
-    await invoke('set_menu_bar_icon_visible', { visible: showMenuBarIcon.value });
+  if (!resetConfirmPending.value) {
+    resetConfirmPending.value = true;
+    resetConfirmTimeout = setTimeout(() => {
+      resetConfirmPending.value = false;
+    }, 3000);
+    return;
   }
+  resetConfirmPending.value = false;
+  if (resetConfirmTimeout) clearTimeout(resetConfirmTimeout);
+  await settingsStore.resetToDefaults();
+  historyLimit.value = settingsStore.historyLimit;
+  startHidden.value = settingsStore.startHidden;
+  activeTheme.value = settingsStore.theme;
+  showMenuBarIcon.value = settingsStore.showMenuBarIcon;
+  await invoke('set_menu_bar_icon_visible', { visible: showMenuBarIcon.value });
 };
 
 // Handle click outside
@@ -277,8 +296,12 @@ const handleKeydown = (e: KeyboardEvent) => {
             <div class="setting-item">
               <label>Clear History</label>
               <div class="setting-control">
-                <button class="danger-btn" @click="clearHistory">
-                  Clear All History
+                <button
+                  class="danger-btn"
+                  :class="{ 'danger-btn-confirm': clearConfirmPending }"
+                  @click="clearHistory"
+                >
+                  {{ clearConfirmPending ? 'Click again to confirm' : 'Clear All History' }}
                 </button>
               </div>
               <p class="setting-description">Remove all items except favorites and pinned</p>
@@ -298,7 +321,13 @@ const handleKeydown = (e: KeyboardEvent) => {
 
         <!-- Footer -->
         <div class="settings-footer">
-          <button class="secondary-btn" @click="resetDefaults">Reset to Defaults</button>
+          <button
+            class="secondary-btn"
+            :class="{ 'danger-btn-confirm': resetConfirmPending }"
+            @click="resetDefaults"
+          >
+            {{ resetConfirmPending ? 'Click again to confirm' : 'Reset to Defaults' }}
+          </button>
           <button class="primary-btn" @click="close">Done</button>
         </div>
       </div>
@@ -529,6 +558,17 @@ input[type="range"]::-webkit-slider-thumb {
 .danger-btn:hover {
   background: #fee2e2;
   border-color: #fca5a5;
+}
+
+.danger-btn-confirm {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: white;
+}
+
+.danger-btn-confirm:hover {
+  background: #b91c1c;
+  border-color: #b91c1c;
 }
 
 .settings-footer {

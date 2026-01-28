@@ -210,6 +210,78 @@ mod platform {
         clipboard_win::set_clipboard(formats::Unicode, text)
             .map_err(|e| format!("Failed to set clipboard: {}", e))
     }
+
+    /// Set clipboard image from a file path
+    pub fn set_clipboard_image(image_path: &str) -> Result<(), String> {
+        let img = image::open(image_path)
+            .map_err(|e| format!("Failed to open image: {}", e))?;
+        let rgba = img.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        let mut clipboard = arboard::Clipboard::new()
+            .map_err(|e| format!("Failed to access clipboard: {}", e))?;
+        clipboard
+            .set_image(arboard::ImageData {
+                width: w as usize,
+                height: h as usize,
+                bytes: std::borrow::Cow::Owned(rgba.into_raw()),
+            })
+            .map_err(|e| format!("Failed to set clipboard image: {}", e))
+    }
+
+    /// Set clipboard to file paths
+    pub fn set_clipboard_files(file_paths: &[String]) -> Result<(), String> {
+        // On Windows, use CF_HDROP via clipboard-win
+        use clipboard_win::raw;
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        unsafe {
+            raw::open().map_err(|e| format!("Failed to open clipboard: {}", e))?;
+            let _ = raw::empty();
+
+            // CF_HDROP format: DROPFILES header + null-terminated wide strings + double null
+            let mut data: Vec<u16> = Vec::new();
+            // DROPFILES struct: 20 bytes header
+            // offset to file list (20), point (0,0), fNC (0), fWide (1)
+            let header: [u8; 20] = [
+                20, 0, 0, 0, // pFiles offset
+                0, 0, 0, 0,  // pt.x
+                0, 0, 0, 0,  // pt.y
+                0, 0, 0, 0,  // fNC
+                1, 0, 0, 0,  // fWide (Unicode)
+            ];
+
+            let mut bytes: Vec<u8> = header.to_vec();
+            for path in file_paths {
+                let wide: Vec<u16> = OsStr::new(path).encode_wide().chain(std::iter::once(0)).collect();
+                for w in &wide {
+                    bytes.push(*w as u8);
+                    bytes.push((*w >> 8) as u8);
+                }
+            }
+            // Double null terminator
+            bytes.push(0);
+            bytes.push(0);
+
+            let hmem = windows::Win32::System::Memory::GlobalAlloc(
+                windows::Win32::System::Memory::GMEM_MOVEABLE,
+                bytes.len(),
+            ).map_err(|e| format!("GlobalAlloc failed: {}", e))?;
+
+            let ptr = windows::Win32::System::Memory::GlobalLock(hmem);
+            if !ptr.is_null() {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+                windows::Win32::System::Memory::GlobalUnlock(hmem);
+            }
+
+            // CF_HDROP = 15
+            windows::Win32::System::DataExchange::SetClipboardData(15, windows::Win32::Foundation::HANDLE(hmem.0))
+                .map_err(|e| format!("SetClipboardData failed: {}", e))?;
+
+            raw::close();
+        }
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -673,6 +745,43 @@ mod platform {
         clipboard
             .set_text(text)
             .map_err(|e| format!("Failed to set clipboard: {}", e))
+    }
+
+    /// Set clipboard image from a file path
+    pub fn set_clipboard_image(image_path: &str) -> Result<(), String> {
+        let img = image::open(image_path)
+            .map_err(|e| format!("Failed to open image: {}", e))?;
+        let rgba = img.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        let mut clipboard = Clipboard::new()
+            .map_err(|e| format!("Failed to access clipboard: {}", e))?;
+        clipboard
+            .set_image(arboard::ImageData {
+                width: w as usize,
+                height: h as usize,
+                bytes: std::borrow::Cow::Owned(rgba.into_raw()),
+            })
+            .map_err(|e| format!("Failed to set clipboard image: {}", e))
+    }
+
+    /// Set clipboard to file paths (macOS: NSPasteboard with file URLs)
+    pub fn set_clipboard_files(file_paths: &[String]) -> Result<(), String> {
+        unsafe {
+            let pasteboard = NSPasteboard::generalPasteboard();
+            pasteboard.clearContents();
+
+            let file_url_type = NSString::from_str("public.file-url");
+            let types = objc2_foundation::NSArray::from_id_slice(&[file_url_type]);
+            pasteboard.declareTypes_owner(&types, None);
+
+            for path in file_paths {
+                let ns_path = NSString::from_str(path);
+                let url = NSURL::fileURLWithPath(&ns_path);
+                let url_string = url.absoluteString().ok_or("Failed to get URL string")?;
+                pasteboard.setString_forType(&url_string, &NSString::from_str("public.file-url"));
+            }
+        }
+        Ok(())
     }
 }
 

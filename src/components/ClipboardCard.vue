@@ -401,104 +401,23 @@ const getFilePathsForDrag = async (): Promise<{ items: string[]; icon: string }>
   return { items: paths, icon: paths[0] || '' };
 };
 
-// Check if item can be dragged as native files (NOT text - text uses HTML5)
+// All items support native drag (text → .txt, link → .webloc/.url, image/files → direct)
 const canDragAsNativeFiles = computed(() => {
   const item = props.item;
-
-  // Images drag as files
-  if (item.content_type === 'image' && item.image_path) {
-    return true;
-  }
-
-  // Files, audio, documents drag as files
+  if (item.content_type === 'image' && item.image_path) return true;
+  if ((item.content_type === 'text' || item.content_type === 'link') && item.content_text) return true;
   const paths = getFilePaths();
   return paths.length > 0;
-});
-
-// Check if item uses HTML5 drag for direct paste (text and links)
-const isTextItem = computed(() => {
-  return (props.item.content_type === 'text' || props.item.content_type === 'link') && props.item.content_text;
 });
 
 // ============================================================================
 // DRAG & DROP IMPLEMENTATION
 // ============================================================================
 //
-// TWO MODES:
-// 1. TEXT ITEMS: HTML5 drag with text/plain (pastes directly into text fields)
-// 2. FILE ITEMS: Custom mouse + native plugin (drops real files to Finder)
+// All items use native drag via mouse tracking + startDrag plugin.
+// Text → .txt file, Link → .webloc/.url, Image/Files → direct paths.
 //
 // ============================================================================
-
-/**
- * HTML5 Drag for TEXT items - allows direct paste into text fields
- */
-const handleTextDragStart = (e: DragEvent) => {
-  // Only handle if this is a text item
-  if (!isTextItem.value || !e.dataTransfer || !props.item.content_text) return;
-
-  e.dataTransfer.effectAllowed = 'copyMove';
-  e.dataTransfer.setData('text/plain', props.item.content_text);
-  e.dataTransfer.setData('application/x-clipboard-item', props.item.id);
-
-  isDragging.value = true;
-  pinboardStore.setDragging(true, props.item.id);
-
-  // Add listener to hide window when drag leaves the app
-  document.addEventListener('dragleave', handleTextDragLeave);
-  document.addEventListener('dragover', handleTextDragOver);
-};
-
-// Track if we're still inside the window during text drag
-let textDragInsideWindow = true;
-
-const handleTextDragOver = () => {
-  // We're inside the window
-  textDragInsideWindow = true;
-};
-
-const handleTextDragLeave = async (e: DragEvent) => {
-  // Only hide when truly leaving the window, not when moving between elements
-  // relatedTarget is null when leaving to outside the browser/app
-  const relatedTarget = e.relatedTarget as Node | null;
-
-  // If relatedTarget exists and is inside the document, we're just moving between elements
-  if (relatedTarget && document.contains(relatedTarget)) {
-    return;
-  }
-
-  // Double-check with coordinates - must be outside window bounds
-  const x = e.clientX;
-  const y = e.clientY;
-  const isOutside = x <= 0 || x >= window.innerWidth || y <= 0 || y >= window.innerHeight;
-
-  if (!isOutside) {
-    return;
-  }
-
-  textDragInsideWindow = false;
-
-  // Small delay to confirm we're really outside
-  setTimeout(async () => {
-    if (!textDragInsideWindow && isDragging.value) {
-      console.log('[handleTextDragLeave] Left window, hiding app');
-      await invoke('hide_window');
-    }
-  }, 50);
-};
-
-const handleTextDragEnd = () => {
-  // Only handle if this is a text item
-  if (!isTextItem.value) return;
-
-  // Remove listeners
-  document.removeEventListener('dragleave', handleTextDragLeave);
-  document.removeEventListener('dragover', handleTextDragOver);
-
-  isDragging.value = false;
-  pinboardStore.setDragging(false, null);
-  textDragInsideWindow = true;
-};
 
 const dragGhost = ref<HTMLElement | null>(null);
 const dragStartPos = ref<{ x: number; y: number } | null>(null);
@@ -756,10 +675,7 @@ const cleanupDrag = () => {
       dragging: isDragging,
     }"
     :style="{ '--type-rgb': typeColorRgb }"
-    :draggable="isTextItem ? true : false"
     @click="handleClick"
-    @dragstart="handleTextDragStart"
-    @dragend="handleTextDragEnd"
   >
     <!-- TRANSPARENT SHIELD: Native drag for files (NOT text) -->
     <div
@@ -986,7 +902,7 @@ const cleanupDrag = () => {
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 1;
+  z-index: 5;
   cursor: grab;
   background: transparent;
 }
@@ -1005,7 +921,7 @@ const cleanupDrag = () => {
   gap: 4px;
   padding: 7px 8px 4px;
   flex-shrink: 0;
-  z-index: 2;
+  z-index: 6;
   position: relative;
 }
 
