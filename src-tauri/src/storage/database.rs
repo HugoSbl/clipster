@@ -413,21 +413,24 @@ impl Database {
     }
 
     /// Delete unpinned items with matching content (for "move to top" behavior)
-    /// Returns the ID of the deleted item (if any) for frontend notification
+    /// Returns the ID, source_app and source_app_icon of the deleted item (if any)
     /// Does NOT delete pinned items - they are preserved separately
-    pub fn delete_unpinned_by_content(&self, content_text: &str) -> Result<Option<String>, String> {
+    pub fn delete_unpinned_by_content(
+        &self,
+        content_text: &str,
+    ) -> Result<Option<(String, Option<String>, Option<String>)>, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        // First, get the ID of the item we're about to delete
-        let existing_id: Option<String> = conn
+        // First, get the ID and source app info of the item we're about to delete
+        let existing: Option<(String, Option<String>, Option<String>)> = conn
             .query_row(
-                "SELECT id FROM clipboard_items WHERE content_text = ?1 AND pinboard_id IS NULL LIMIT 1",
+                "SELECT id, source_app, source_app_icon FROM clipboard_items WHERE content_text = ?1 AND pinboard_id IS NULL LIMIT 1",
                 params![content_text],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .ok();
 
-        if existing_id.is_some() {
+        if existing.is_some() {
             conn.execute(
                 "DELETE FROM clipboard_items WHERE content_text = ?1 AND pinboard_id IS NULL",
                 params![content_text],
@@ -435,7 +438,7 @@ impl Database {
             .map_err(|e| format!("Failed to delete by content: {}", e))?;
         }
 
-        Ok(existing_id)
+        Ok(existing)
     }
 
     // ==================== PINBOARDS ====================

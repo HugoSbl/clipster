@@ -74,22 +74,28 @@ impl ClipboardMonitorHandler {
         // "Move to top" behavior: delete existing unpinned item, then create new
         // This ensures the most recent copy is always at the top
         // Pinned items are NOT affected - they stay in their pinboards
-        let replaced_item_id = match self.db.delete_unpinned_by_content(&text) {
-            Ok(Some(id)) => {
-                eprintln!("║   MOVE TO TOP: deleted existing item {}", id);
-                Some(id)
-            }
-            Ok(None) => {
-                eprintln!("║   New content (not in unpinned history)");
-                None
-            }
-            Err(e) => {
-                eprintln!("║   Warning: delete_unpinned_by_content failed: {}", e);
-                None
-            }
-        };
+        let (replaced_item_id, original_source_app, original_source_icon) =
+            match self.db.delete_unpinned_by_content(&text) {
+                Ok(Some((id, app, icon))) => {
+                    eprintln!("║   MOVE TO TOP: deleted existing item {} (app: {:?})", id, app);
+                    (Some(id), app, icon)
+                }
+                Ok(None) => {
+                    eprintln!("║   New content (not in unpinned history)");
+                    (None, None, None)
+                }
+                Err(e) => {
+                    eprintln!("║   Warning: delete_unpinned_by_content failed: {}", e);
+                    (None, None, None)
+                }
+            };
 
-        let (source_app, source_app_icon) = self.get_source_app_info();
+        // Preserve original source app icon when re-copying from within the app
+        let (source_app, source_app_icon) = if original_source_app.is_some() {
+            (original_source_app, original_source_icon)
+        } else {
+            self.get_source_app_info()
+        };
         eprintln!("║   source_app: {:?}", source_app);
         eprintln!("╚═══════════════════════════════════════════════════════════");
 
@@ -243,20 +249,21 @@ impl ClipboardMonitorHandler {
         // "Move to top" behavior: delete existing unpinned item, then create new
         let files_json = serde_json::to_string(&files).unwrap_or_default();
 
-        let replaced_item_id = match self.db.delete_unpinned_by_content(&files_json) {
-            Ok(Some(id)) => {
-                eprintln!("║   MOVE TO TOP: deleted existing item {}", id);
-                Some(id)
-            }
-            Ok(None) => {
-                eprintln!("║   New content (not in unpinned history)");
-                None
-            }
-            Err(e) => {
-                eprintln!("║   Warning: delete_unpinned_by_content failed: {}", e);
-                None
-            }
-        };
+        let (replaced_item_id, original_source_app, original_source_icon) =
+            match self.db.delete_unpinned_by_content(&files_json) {
+                Ok(Some((id, app, icon))) => {
+                    eprintln!("║   MOVE TO TOP: deleted existing item {} (app: {:?})", id, app);
+                    (Some(id), app, icon)
+                }
+                Ok(None) => {
+                    eprintln!("║   New content (not in unpinned history)");
+                    (None, None, None)
+                }
+                Err(e) => {
+                    eprintln!("║   Warning: delete_unpinned_by_content failed: {}", e);
+                    (None, None, None)
+                }
+            };
 
         // Generate thumbnail for the first file (if possible)
         // IMPORTANT: Thumbnail failure MUST NOT prevent item creation
@@ -267,10 +274,15 @@ impl ClipboardMonitorHandler {
             None => eprintln!("║   Thumbnail: None (will use file icon)"),
         }
 
-        // For files, use the file's own icon instead of source app
-        // This is more informative (shows PDF icon, Word icon, etc.)
-        let first_file = &files[0];
-        let (source_app, source_app_icon) = self.get_file_app_info(first_file);
+        // Preserve original source app icon when re-copying from within the app
+        let (source_app, source_app_icon) = if original_source_app.is_some() {
+            (original_source_app, original_source_icon)
+        } else {
+            // For new files, use the file's own icon instead of source app
+            // This is more informative (shows PDF icon, Word icon, etc.)
+            let first_file = &files[0];
+            self.get_file_app_info(first_file)
+        };
         eprintln!("║   source_app: {:?}", source_app);
         eprintln!("╚═══════════════════════════════════════════════════════════");
 
