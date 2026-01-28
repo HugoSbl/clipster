@@ -328,6 +328,14 @@ pub fn setup_window_behavior(window: &tauri::WebviewWindow) {
             return;
         };
         unsafe {
+            // ── 0. Force Accessory activation policy (no Dock icon) ──────
+            // LSUIElement in Info.plist can be ignored due to LaunchServices
+            // caching or dev-mode quirks.  Setting the policy in code
+            // guarantees the Dock icon stays hidden.
+            //   0 = Regular (Dock icon), 1 = Accessory (no Dock), 2 = Prohibited
+            let app = ns_app();
+            let _: bool = msg_send![app, setActivationPolicy: 1isize];
+
             // ── 1. Swizzle NSWindow → SpotlightPanel ─────────────────────
             // SpotlightPanel is a runtime subclass of NSPanel that overrides
             // canBecomeKeyWindow → YES.  Without this, WebKit treats the

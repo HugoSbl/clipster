@@ -10,6 +10,7 @@ interface ClipboardState {
   totalCount: number;
   error: string | null;
   activePinboardId: string | null; // null = show all history
+  lockedItemIds: Map<string, ClipboardItem | null>; // Map of old ID -> pending replacement item (null = no replacement yet)
 }
 
 export const useClipboardStore = defineStore('clipboard', {
@@ -20,6 +21,7 @@ export const useClipboardStore = defineStore('clipboard', {
     totalCount: 0,
     error: null,
     activePinboardId: null,
+    lockedItemIds: new Map<string, ClipboardItem | null>(),
   }),
 
   getters: {
@@ -208,11 +210,22 @@ export const useClipboardStore = defineStore('clipboard', {
 
       // If this item replaced an existing one (move to top), remove the old one
       if (replacedItemId) {
-        const hadItem = this.items.some((existing) => existing.id === replacedItemId);
-        console.log('[addItem] Looking for replaced item, found:', hadItem);
+        const oldIndex = this.items.findIndex((existing) => existing.id === replacedItemId);
+        console.log('[addItem] Looking for replaced item, found at index:', oldIndex);
 
-        if (hadItem) {
-          this.items = this.items.filter((existing) => existing.id !== replacedItemId);
+        if (oldIndex !== -1) {
+          // Check if the replaced item is locked (waiting for copy animation)
+          if (this.lockedItemIds.has(replacedItemId)) {
+            console.log('[addItem] Item is locked, storing pending replacement:', replacedItemId);
+            // DON'T touch the items array — keep the old item alive so Vue
+            // preserves the ClipboardCard component (and its "Copied!" overlay).
+            // Store the new item for later application in unlockAndMoveToTop().
+            this.lockedItemIds.set(replacedItemId, item);
+            return;
+          }
+
+          // Normal case: remove old and add new at top
+          this.items.splice(oldIndex, 1);
           console.log('[addItem] After removing old item:', this.items.map((i) => i.id));
           this.items.unshift(item);
           console.log('[addItem] After adding new item:', this.items.map((i) => i.id));
@@ -332,6 +345,39 @@ export const useClipboardStore = defineStore('clipboard', {
       if (index !== -1) {
         this.items.splice(index, 1);
         this.totalCount = Math.max(0, this.totalCount - 1);
+      }
+    },
+
+    /**
+     * Lock an item to prevent reordering (for copy animation)
+     */
+    lockItem(itemId: string): void {
+      this.lockedItemIds.set(itemId, null);
+    },
+
+    /**
+     * Unlock an item and move it (or its replacement) to the top
+     */
+    unlockAndMoveToTop(itemId: string): void {
+      const pendingItem = this.lockedItemIds.get(itemId);
+      this.lockedItemIds.delete(itemId);
+
+      if (pendingItem) {
+        // A replacement arrived while locked — remove old item, add new one at top
+        const oldIndex = this.items.findIndex((i) => i.id === itemId);
+        if (oldIndex !== -1) {
+          this.items.splice(oldIndex, 1);
+        }
+        this.items.unshift(pendingItem);
+        console.log('[unlockAndMoveToTop] Replaced and moved to top:', itemId, '->', pendingItem.id);
+      } else {
+        // No replacement came — just move the existing item to top
+        const index = this.items.findIndex((i) => i.id === itemId);
+        if (index > 0) {
+          const [item] = this.items.splice(index, 1);
+          this.items.unshift(item);
+          console.log('[unlockAndMoveToTop] Moved item to top:', itemId);
+        }
       }
     },
   },

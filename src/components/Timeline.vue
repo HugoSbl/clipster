@@ -40,10 +40,25 @@ const handleSelect = (item: ClipboardItem) => {
 };
 
 const handleCopy = async (item: ClipboardItem) => {
+  console.log('[Timeline] handleCopy called for item:', item.id, 'type:', item.content_type);
+
+  // Lock the item to prevent reordering during animation
+  store.lockItem(item.id);
+
+  // Copy to clipboard
   const success = await store.copyToClipboard(item.id);
+  console.log('[Timeline] Copy result:', success);
+
   if (success) {
     console.log('Copied to clipboard:', item.id);
+  } else {
+    console.error('[Timeline] Failed to copy item:', item.id, 'Error:', store.error);
   }
+
+  // After 1.5s (matching copy animation), unlock and move to top
+  setTimeout(() => {
+    store.unlockAndMoveToTop(item.id);
+  }, 1500);
 };
 
 const handleDelete = async (id: string) => {

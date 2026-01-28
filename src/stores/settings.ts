@@ -8,6 +8,7 @@ export interface AppSettings {
   history_limit: number;
   start_hidden: boolean;
   theme: Theme;
+  show_menu_bar_icon: boolean;
 }
 
 interface SettingsState {
@@ -22,6 +23,7 @@ const defaultSettings: AppSettings = {
   history_limit: 500,
   start_hidden: false,
   theme: 'dark',
+  show_menu_bar_icon: true,
 };
 
 export const useSettingsStore = defineStore('settings', {
@@ -37,6 +39,7 @@ export const useSettingsStore = defineStore('settings', {
     historyLimit: (state) => state.settings.history_limit,
     startHidden: (state) => state.settings.start_hidden,
     theme: (state) => state.settings.theme,
+    showMenuBarIcon: (state) => state.settings.show_menu_bar_icon,
   },
 
   actions: {
@@ -77,6 +80,8 @@ export const useSettingsStore = defineStore('settings', {
           this.settings.start_hidden = value as boolean;
         } else if (key === 'theme') {
           this.settings.theme = value as Theme;
+        } else if (key === 'show_menu_bar_icon') {
+          this.settings.show_menu_bar_icon = value as boolean;
         }
 
         return true;
@@ -125,6 +130,7 @@ export const useSettingsStore = defineStore('settings', {
         await this.setHistoryLimit(defaultSettings.history_limit);
         await this.updateSetting('start_hidden', defaultSettings.start_hidden);
         await this.updateSetting('theme', defaultSettings.theme);
+        await this.updateSetting('show_menu_bar_icon', defaultSettings.show_menu_bar_icon);
         return true;
       } catch (e) {
         this.error = e instanceof Error ? e.message : String(e);

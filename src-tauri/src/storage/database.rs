@@ -155,6 +155,12 @@ impl Database {
         )
         .map_err(|e| format!("Failed to insert default theme: {}", e))?;
 
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('show_menu_bar_icon', 'true')",
+            [],
+        )
+        .map_err(|e| format!("Failed to insert default show_menu_bar_icon: {}", e))?;
+
         Ok(())
     }
 

@@ -9,9 +9,13 @@ import type { Theme } from '@/stores/settings';
 const settingsStore = useSettingsStore();
 const clipboardStore = useClipboardStore();
 
+// Platform detection
+const isMac = navigator.platform.startsWith('Mac');
+
 // Local state for form inputs
 const historyLimit = ref(500);
 const startHidden = ref(false);
+const showMenuBarIcon = ref(true);
 
 // Computed
 const isOpen = computed(() => settingsStore.showModal);
@@ -28,6 +32,7 @@ onMounted(async () => {
   historyLimit.value = settingsStore.historyLimit;
   startHidden.value = settingsStore.startHidden;
   activeTheme.value = settingsStore.theme;
+  showMenuBarIcon.value = settingsStore.showMenuBarIcon;
 });
 
 // Refresh autostart state when modal opens
@@ -80,6 +85,13 @@ const toggleAutoStart = async () => {
   }
 };
 
+// Toggle menu bar icon visibility (macOS only)
+const toggleMenuBarIcon = async () => {
+  showMenuBarIcon.value = !showMenuBarIcon.value;
+  await settingsStore.updateSetting('show_menu_bar_icon', showMenuBarIcon.value);
+  await invoke('set_menu_bar_icon_visible', { visible: showMenuBarIcon.value });
+};
+
 // Quit application
 const quitApp = async () => {
   await invoke('quit_app');
@@ -98,6 +110,8 @@ const resetDefaults = async () => {
     historyLimit.value = settingsStore.historyLimit;
     startHidden.value = settingsStore.startHidden;
     activeTheme.value = settingsStore.theme;
+    showMenuBarIcon.value = settingsStore.showMenuBarIcon;
+    await invoke('set_menu_bar_icon_visible', { visible: showMenuBarIcon.value });
   }
 };
 
@@ -226,6 +240,20 @@ const handleKeydown = (e: KeyboardEvent) => {
                 </button>
               </div>
               <p class="setting-description">Automatically start Clipster when you log in</p>
+            </div>
+
+            <div v-if="isMac" class="setting-item">
+              <label>Menu Bar Icon</label>
+              <div class="setting-control">
+                <button
+                  class="toggle-btn"
+                  :class="{ active: showMenuBarIcon }"
+                  @click="toggleMenuBarIcon"
+                >
+                  {{ showMenuBarIcon ? 'On' : 'Off' }}
+                </button>
+              </div>
+              <p class="setting-description">Show Clipster icon in the menu bar</p>
             </div>
           </section>
 

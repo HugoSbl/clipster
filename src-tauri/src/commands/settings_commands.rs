@@ -1,6 +1,6 @@
 use crate::AppState;
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, State};
 
 /// Settings structure returned to frontend
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9,6 +9,7 @@ pub struct AppSettings {
     pub history_limit: u32,
     pub start_hidden: bool,
     pub theme: String,
+    pub show_menu_bar_icon: bool,
 }
 
 impl Default for AppSettings {
@@ -18,6 +19,7 @@ impl Default for AppSettings {
             history_limit: 500,
             start_hidden: false,
             theme: "dark".to_string(),
+            show_menu_bar_icon: true,
         }
     }
 }
@@ -47,11 +49,18 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
         .get_setting("theme")?
         .unwrap_or_else(|| "dark".to_string());
 
+    let show_menu_bar_icon_str = state
+        .db
+        .get_setting("show_menu_bar_icon")?
+        .unwrap_or_else(|| "true".to_string());
+    let show_menu_bar_icon = show_menu_bar_icon_str == "true";
+
     Ok(AppSettings {
         shortcut,
         history_limit,
         start_hidden,
         theme,
+        show_menu_bar_icon,
     })
 }
 
@@ -77,5 +86,24 @@ pub fn set_history_limit(state: State<'_, AppState>, limit: u32) -> Result<(), S
     state.db.set_setting("history_limit", &limit.to_string())?;
     // Prune old items if over limit
     state.db.prune_oldest(limit as usize)?;
+    Ok(())
+}
+
+/// Set menu bar icon visibility (macOS)
+#[tauri::command]
+pub fn set_menu_bar_icon_visible(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    visible: bool,
+) -> Result<(), String> {
+    state
+        .db
+        .set_setting("show_menu_bar_icon", if visible { "true" } else { "false" })?;
+
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        tray.set_visible(visible)
+            .map_err(|e| format!("Failed to set tray visibility: {}", e))?;
+    }
+
     Ok(())
 }

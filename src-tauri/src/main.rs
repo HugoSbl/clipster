@@ -17,7 +17,7 @@ use commands::pinboard_commands::{
     get_pinboards, remove_item_from_pinboard, reorder_pinboards, update_pinboard,
 };
 use commands::settings_commands::{
-    get_history_limit, get_settings, set_history_limit, update_setting,
+    get_history_limit, get_settings, set_history_limit, set_menu_bar_icon_visible, update_setting,
 };
 use commands::window_commands::{
     hide_panel, hide_window, quit_app, reposition_to_cursor_monitor, setup_window_behavior,
@@ -95,7 +95,7 @@ fn main() {
 
             // Create tray icon
             let app_handle_for_tray = app.handle().clone();
-            let _tray = TrayIconBuilder::new()
+            let tray = TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .tooltip("Clipster - Clipboard Manager")
@@ -129,6 +129,14 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
+
+            // Hide tray icon if setting is false
+            let show_tray = db.get_setting("show_menu_bar_icon")
+                .unwrap_or(None)
+                .unwrap_or_else(|| "true".to_string());
+            if show_tray != "true" {
+                let _ = tray.set_visible(false);
+            }
 
             println!("System tray created");
 
@@ -185,6 +193,7 @@ fn main() {
             update_setting,
             get_history_limit,
             set_history_limit,
+            set_menu_bar_icon_visible,
             // Window commands
             hide_window,
             show_window,

@@ -21,6 +21,7 @@ const pinboardStore = usePinboardStore();
 // Refs
 const cardRef = ref<HTMLElement | null>(null);
 const isDragging = ref(false);
+const showCopiedFeedback = ref(false);
 
 // Format timestamp for display
 const formattedTime = computed(() => {
@@ -38,12 +39,10 @@ const formattedTime = computed(() => {
   return date.toLocaleDateString();
 });
 
-// Get truncated text preview
+// Get text preview (show more content, let CSS handle truncation)
 const textPreview = computed(() => {
   if (props.item.content_type !== 'text' || !props.item.content_text) return '';
-  const text = props.item.content_text;
-  if (text.length <= 80) return text;
-  return text.substring(0, 80) + '...';
+  return props.item.content_text;
 });
 
 // Get header label (type or filename)
@@ -229,20 +228,19 @@ const thumbnailDataUrl = computed(() => {
   return `data:image/png;base64,${base64}`;
 });
 
-// Handle double click to copy
-const handleDoubleClick = () => {
+// Handle single click to copy
+const handleClick = () => {
   emit('copy', props.item);
+  showCopiedFeedback.value = true;
+  setTimeout(() => {
+    showCopiedFeedback.value = false;
+  }, 1500);
 };
 
 // Handle delete
 const handleDelete = (e: Event) => {
   e.stopPropagation();
   emit('delete', props.item.id);
-};
-
-// Handle card click
-const handleClick = () => {
-  emit('select', props.item);
 };
 
 // Sanitize a string to be safe for filenames
@@ -507,11 +505,8 @@ const dragStartPos = ref<{ x: number; y: number } | null>(null);
 const pendingDragPaths = ref<string[]>([]);
 const pendingDragIcon = ref<string>('');
 const hasTriggeredNative = ref(false);
-const lastClickTime = ref(0);
-
 const DRAG_THRESHOLD = 5;
 const EDGE_MARGIN = 50;
-const DOUBLE_CLICK_DELAY = 300;
 
 /**
  * Check if cursor should trigger native drag (near edge or outside window).
@@ -688,29 +683,19 @@ const handleMouseUp = (e: MouseEvent) => {
   document.removeEventListener('mousemove', handleMouseMove);
   document.removeEventListener('mouseup', handleMouseUp);
 
-  // If we weren't dragging (mouse didn't move past threshold), treat as click
+  // If we weren't dragging (mouse didn't move past threshold), treat as click → copy
   if (!isDragging.value && dragStartPos.value) {
     const dx = Math.abs(e.clientX - dragStartPos.value.x);
     const dy = Math.abs(e.clientY - dragStartPos.value.y);
 
     if (dx <= DRAG_THRESHOLD && dy <= DRAG_THRESHOLD) {
-      // This was a click, not a drag
-      const now = Date.now();
-      const timeSinceLastClick = now - lastClickTime.value;
-
-      if (timeSinceLastClick < DOUBLE_CLICK_DELAY) {
-        // Double-click - copy the item
-        cleanupDrag();
-        emit('copy', props.item);
-        lastClickTime.value = 0; // Reset to prevent triple-click issues
-        return;
-      } else {
-        // Single click - select the item
-        lastClickTime.value = now;
-        cleanupDrag();
-        emit('select', props.item);
-        return;
-      }
+      cleanupDrag();
+      emit('copy', props.item);
+      showCopiedFeedback.value = true;
+      setTimeout(() => {
+        showCopiedFeedback.value = false;
+      }, 1500);
+      return;
     }
   }
 
@@ -772,7 +757,6 @@ const cleanupDrag = () => {
     :style="{ '--type-rgb': typeColorRgb }"
     :draggable="isTextItem ? true : false"
     @click="handleClick"
-    @dblclick="handleDoubleClick"
     @dragstart="handleTextDragStart"
     @dragend="handleTextDragEnd"
   >
@@ -782,6 +766,18 @@ const cleanupDrag = () => {
       class="drag-shield"
       @mousedown="handleMouseDown"
     ></div>
+
+    <!-- COPIED FEEDBACK OVERLAY -->
+    <transition name="copied-fade">
+      <div v-if="showCopiedFeedback" class="copied-overlay">
+        <div class="copied-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        </div>
+        <span class="copied-text">Copied!</span>
+      </div>
+    </transition>
 
     <!-- Header row: glass title pill + glass delete pill -->
     <div class="card-header">
@@ -1229,20 +1225,43 @@ const cleanupDrag = () => {
 /* Text */
 .text-content {
   height: 100%;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Thin discreet scrollbar */
+.text-content::-webkit-scrollbar {
+  width: 3px;
+}
+
+.text-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.text-content::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 3px;
+}
+
+.text-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+html.dark .text-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+html.dark .text-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .text-preview {
   margin: 0;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 500;
-  line-height: 1.4;
+  line-height: 1.5;
   color: #374151;
   word-break: break-word;
-  display: -webkit-box;
-  -webkit-line-clamp: 6;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
 /* Placeholder */
@@ -1295,6 +1314,78 @@ const cleanupDrag = () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ============================================================================
+   COPIED FEEDBACK OVERLAY
+   ============================================================================ */
+
+.copied-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(16, 185, 129, 0.95);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: 16px;
+  pointer-events: none;
+}
+
+.copied-icon {
+  width: 48px;
+  height: 48px;
+  color: white;
+  animation: copied-bounce 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+.copied-icon svg {
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
+}
+
+.copied-text {
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* Transition for overlay */
+.copied-fade-enter-active,
+.copied-fade-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.copied-fade-enter-from {
+  opacity: 0;
+  transform: scale(0.9);
+}
+
+.copied-fade-leave-to {
+  opacity: 0;
+  transform: scale(1.05);
+}
+
+/* Bounce animation for checkmark */
+@keyframes copied-bounce {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 /* ============================================================================

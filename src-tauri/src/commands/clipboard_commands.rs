@@ -65,15 +65,21 @@ pub fn copy_to_clipboard(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
+    println!("[copy_to_clipboard] Called with id: {}", id);
+
     let item = state
         .db
         .get_item(&id)?
         .ok_or_else(|| "Item not found".to_string())?;
 
+    println!("[copy_to_clipboard] Found item, type: {:?}", item.content_type);
+
     match item.content_type {
         crate::models::ContentType::Text | crate::models::ContentType::Link => {
             if let Some(text) = &item.content_text {
+                println!("[copy_to_clipboard] Setting clipboard text (length: {})", text.len());
                 clipboard_reader::set_clipboard_text(text)?;
+                println!("[copy_to_clipboard] Successfully set clipboard text");
             } else {
                 return Err("No text content in item".to_string());
             }
